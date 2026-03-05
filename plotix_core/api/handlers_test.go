@@ -8,11 +8,12 @@ import (
 	"testing"
 
 	"plotix_core/core"
+	"plotix_core/crypto"
 	"plotix_core/models"
 )
 
 func TestHandleGetPeers(t *testing.T) {
-	state := core.NewNodeState()
+	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
 	state.Mu.Lock()
 	state.Peers["test_peer_1"] = "192.168.1.10"
 	state.Mu.Unlock()
@@ -40,7 +41,7 @@ func TestHandleGetPeers(t *testing.T) {
 }
 
 func TestHandleSendMessage_Valid(t *testing.T) {
-	state := core.NewNodeState()
+	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
 	server := NewServer(state)
 
 	payload := models.SendMessageReq{
@@ -67,7 +68,7 @@ func TestHandleSendMessage_Valid(t *testing.T) {
 }
 
 func TestHandleSendMessage_InvalidMethod(t *testing.T) {
-	state := core.NewNodeState()
+	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
 	server := NewServer(state)
 
 	req := httptest.NewRequest(http.MethodGet, "/send_message", nil)
