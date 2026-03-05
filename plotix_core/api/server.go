@@ -25,6 +25,7 @@ func (s *Server) Start(port string) {
 	http.HandleFunc("/peers", s.handleGetPeers)
 	http.HandleFunc("/send_message", s.handleSendMessage)
 	http.HandleFunc("/events", s.handleWSEvents)
+	http.HandleFunc("/add_peer", s.handleAddPeerManual)
 
 	addr := fmt.Sprintf("127.0.0.1:%s", port)
 	log.Printf("[SERVER] Локальное API запущено на http://%s", addr)
