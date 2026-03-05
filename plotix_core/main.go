@@ -2,12 +2,17 @@ package main
 
 import (
 	"bufio"
+	"embed"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"plotix_core/api"
 	"plotix_core/core"
@@ -16,6 +21,8 @@ import (
 	"plotix_core/transport"
 	"plotix_core/utils"
 )
+
+var uiStatic embed.FS
 
 func main() {
 	ifaceFlag := flag.String("iface", "", "Network interface name")
@@ -61,7 +68,10 @@ func main() {
 
 	state := core.NewNodeState(ident)
 
-	go transport.StartServer(state)
+	uiContent, _ := fs.Sub(uiStatic, "ui_dist")
+	server := api.NewServer(state, uiContent)
+
+	go transport.StartServer(state, server.Broadcast)
 
 	discovery.Start(state, selectedIface)
 
@@ -72,12 +82,32 @@ func main() {
 				PeerID:    state.Identity.PeerID,
 				PublicKey: state.Identity.PublicKey,
 			}
-			if err := transport.SendPacket(ip, "handshake", h); err != nil {
+			if err := transport.SendPacket(state, server.Broadcast, "", ip, "handshake", h); err != nil {
 				log.Printf("[BOOT] Ошибка Handshake с %s: %v", ip, err)
 			}
 		}
 	}()
 
-	server := api.NewServer(state)
+	go func() {
+		time.Sleep(1 * time.Second)
+		log.Println("[UI] Opening browser...")
+		openBrowser("http://localhost:8080")
+	}()
+
 	server.Start("8080")
+}
+
+func openBrowser(url string) {
+	var err error
+	switch runtime.GOOS {
+	case "windows":
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		err = exec.Command("open", url).Start()
+	default:
+		err = exec.Command("xdg-open", url).Start()
+	}
+	if err != nil {
+		log.Printf("[UI] Could not open browser: %v", err)
+	}
 }

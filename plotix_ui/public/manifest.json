@@ -1,0 +1,15 @@
+{
+  "short_name": "Plotix",
+  "name": "Plotix Local P2P Messenger",
+  "icons": [
+    {
+      "src": "vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#4f46e5",
+  "background_color": "#111827"
+}

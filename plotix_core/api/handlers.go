@@ -10,8 +10,6 @@ import (
 )
 
 func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -26,14 +24,6 @@ func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -55,7 +45,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chat := transport.ChatPayload{Content: req.Message}
-	if err := transport.SendPacket(ip, "chat", chat); err != nil {
+	if err := transport.SendPacket(s.state, s.Broadcast, req.PeerID, ip, "chat", chat); err != nil {
 		http.Error(w, "Failed to send: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -65,7 +55,6 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAddPeerManual(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -87,23 +76,28 @@ func (s *Server) handleAddPeerManual(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWSEvents(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("[WS] Ошибка апгрейда соединения:", err)
+		log.Println("[WS] Upgrade error:", err)
 		return
 	}
-	defer conn.Close()
 
-	log.Println("[WS] UI Клиент успешно подключился по WebSocket")
+	s.mu.Lock()
+	s.clients[conn] = true
+	s.mu.Unlock()
 
-	evt := models.WSEvent{
+	log.Println("[WS] UI client connected")
+
+	conn.WriteJSON(models.WSEvent{
 		Type:    "system_info",
-		Payload: "Connected to Plotix Core (Stage 1)",
-	}
-	conn.WriteJSON(evt)
+		Payload: "Connected to Plotix Broadcast System",
+	})
 
 	for {
-		_, _, err := conn.ReadMessage()
-		if err != nil {
-			log.Println("[WS] Клиент отключился:", err)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			s.mu.Lock()
+			delete(s.clients, conn)
+			s.mu.Unlock()
+			conn.Close()
+			log.Println("[WS] UI client disconnected")
 			break
 		}
 	}
