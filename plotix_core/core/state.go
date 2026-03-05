@@ -10,17 +10,25 @@ type NodeState struct {
 	Mu       sync.RWMutex
 	Identity *crypto.Identity
 	Peers    map[string]string
+
+	NewPeerChan chan string
 }
 
 func NewNodeState(ident *crypto.Identity) *NodeState {
 	return &NodeState{
-		Identity: ident,
-		Peers:    make(map[string]string),
+		Identity:    ident,
+		Peers:       make(map[string]string),
+		NewPeerChan: make(chan string, 10),
 	}
 }
 
 func (s *NodeState) UpdatePeer(peerID, ip string) {
 	s.Mu.Lock()
-	defer s.Mu.Unlock()
+	_, exists := s.Peers[peerID]
 	s.Peers[peerID] = ip
+	s.Mu.Unlock()
+
+	if !exists {
+		s.NewPeerChan <- ip
+	}
 }

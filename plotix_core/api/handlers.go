@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"plotix_core/models"
+	"plotix_core/transport"
 )
 
 func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
@@ -44,10 +45,23 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[CORE] Имитация отправки сообщения юзеру %s: %s", req.PeerID, req.Message)
+	s.state.Mu.RLock()
+	ip, exists := s.state.Peers[req.PeerID]
+	s.state.Mu.RUnlock()
+
+	if !exists {
+		http.Error(w, "Peer not found", http.StatusNotFound)
+		return
+	}
+
+	chat := transport.ChatPayload{Content: req.Message}
+	if err := transport.SendPacket(ip, "chat", chat); err != nil {
+		http.Error(w, "Failed to send: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
 }
 
 func (s *Server) handleAddPeerManual(w http.ResponseWriter, r *http.Request) {

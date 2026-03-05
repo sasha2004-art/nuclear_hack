@@ -13,6 +13,7 @@ import (
 	"plotix_core/core"
 	"plotix_core/crypto"
 	"plotix_core/discovery"
+	"plotix_core/transport"
 	"plotix_core/utils"
 )
 
@@ -60,7 +61,22 @@ func main() {
 
 	state := core.NewNodeState(ident)
 
+	go transport.StartServer(state)
+
 	discovery.Start(state, selectedIface)
+
+	go func() {
+		for ip := range state.NewPeerChan {
+			log.Printf("[BOOT] Инициирую Handshake с %s", ip)
+			h := transport.HandshakePayload{
+				PeerID:    state.Identity.PeerID,
+				PublicKey: state.Identity.PublicKey,
+			}
+			if err := transport.SendPacket(ip, "handshake", h); err != nil {
+				log.Printf("[BOOT] Ошибка Handshake с %s: %v", ip, err)
+			}
+		}
+	}()
 
 	server := api.NewServer(state)
 	server.Start("8080")
