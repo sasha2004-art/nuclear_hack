@@ -1,0 +1,39 @@
+# Binary
+*.exe
+
+# Generated
+1.txt
+
+# Identity (private key)
+identity.json
+
+# Go
+vendor/
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Scripts
+1.py
+2.py
+
+1.txt
+
+# Claude
+.claude/
