@@ -2,18 +2,44 @@ package transport
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"plotix_core/core"
+	"plotix_core/crypto"
 	"plotix_core/models"
 	"plotix_core/storage"
 )
 
 const tcpPort = "10000"
+
+// writeMu хранит мьютексы для каждого соединения, предотвращая наложение пакетов
+var writeMu sync.Map
+
+// sendDataSafe выстраивает пакеты в очередь, гарантируя целостность потока
+func sendDataSafe(conn net.Conn, data []byte) error {
+	m, _ := writeMu.LoadOrStore(conn, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	defer conn.SetWriteDeadline(time.Time{})
+
+	if err := binary.Write(conn, binary.BigEndian, int32(len(data))); err != nil {
+		return err
+	}
+	if _, err := conn.Write(data); err != nil {
+		return err
+	}
+	return nil
+}
 
 func StartServer(state *core.NodeState, uiEvents chan models.WSEvent) {
 	ln, err := net.Listen("tcp", ":"+tcpPort)
@@ -36,12 +62,13 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 
 	defer func() {
 		if remotePeerID != "" {
-			state.RemoveConnection(remotePeerID)
-			state.Mu.Lock()
-			delete(state.LastSeen, remotePeerID)
-			state.Mu.Unlock()
+			// Удаляем соединение, только если оно не было заменено новым
+			if state.GetConnection(remotePeerID) == conn {
+				state.RemoveConnection(remotePeerID)
+			}
 			log.Printf("[TRANSPORT] Connection with %s closed", remotePeerID)
 		}
+		writeMu.Delete(conn)
 		conn.Close()
 	}()
 
@@ -49,13 +76,11 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 		var size int32
 		err := binary.Read(conn, binary.BigEndian, &size)
 		if err != nil {
-			if err != io.EOF {
-				log.Printf("[TRANSPORT] Read size error: %v", err)
-			}
 			break
 		}
 
 		if size > 10*1024*1024 || size < 0 {
+			log.Printf("[TRANSPORT] Invalid packet size: %d. Closing connection.", size)
 			break
 		}
 
@@ -74,13 +99,47 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 		case "handshake":
 			var h HandshakePayload
 			json.Unmarshal(packet.Payload, &h)
+
+			isInitial := (remotePeerID == "")
 			remotePeerID = h.PeerID
 
 			state.UpdatePeer(h.PeerID, conn.RemoteAddr().(*net.TCPAddr).IP.String())
 			state.SetPeerName(h.PeerID, h.Name)
+			state.SetPeerPubKey(h.PeerID, h.PublicKey)
 			state.SaveConnection(h.PeerID, conn)
 
-			log.Printf("[TRANSPORT] Handshake OK: %s connected. Starting Gossip Sync...", h.PeerID)
+			if h.EphemeralPub != "" {
+				peerPub, _ := hex.DecodeString(h.EphemeralPub)
+				state.Mu.RLock()
+				mySec := state.EphemeralPriv
+				state.Mu.RUnlock()
+
+				sharedKey := crypto.ComputeSharedSecret(mySec, peerPub)
+				if sharedKey != nil {
+					state.SetSessionKey(h.PeerID, sharedKey)
+				}
+			}
+
+			log.Printf("[SECURITY] SECURE E2EE Handshake OK: %s.", h.PeerID)
+
+			if isInitial {
+				state.Mu.RLock()
+				var displayName string
+				if state.DisplayName != nil {
+					displayName = state.DisplayName()
+				}
+				ackH := HandshakePayload{
+					PeerID:       state.Identity.PeerID,
+					PublicKey:    state.Identity.PublicKey,
+					Name:         displayName,
+					EphemeralPub: hex.EncodeToString(state.EphemeralPub),
+				}
+				state.Mu.RUnlock()
+				hData, _ := json.Marshal(ackH)
+				ackPacket := Packet{Type: "handshake_ack", Payload: hData}
+				packetData, _ := json.Marshal(ackPacket)
+				sendDataSafe(conn, packetData)
+			}
 
 			go ResendPendingMessages(state, h.PeerID, uiEvents)
 
@@ -89,135 +148,155 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 				state.Mu.RLock()
 				myID := state.Identity.PeerID
 				state.Mu.RUnlock()
-				syncReq := SyncRequestPayload{
-					PeerID: myID,
-					Heads:  myHeads,
-				}
+				syncReq := SyncRequestPayload{PeerID: myID, Heads: myHeads}
 				reqData, _ := json.Marshal(syncReq)
 				syncPacket := Packet{Type: "sync_request", Payload: reqData}
 				packetData, _ := json.Marshal(syncPacket)
-				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				binary.Write(conn, binary.BigEndian, int32(len(packetData)))
-				conn.Write(packetData)
-				conn.SetWriteDeadline(time.Time{})
-				log.Printf("[GOSSIP] Sent sync_request to %s with %d heads", h.PeerID, len(myHeads))
+				sendDataSafe(conn, packetData)
 			}()
+
+		case "handshake_ack":
+			var h HandshakePayload
+			json.Unmarshal(packet.Payload, &h)
+			remotePeerID = h.PeerID
+
+			state.UpdatePeer(h.PeerID, conn.RemoteAddr().(*net.TCPAddr).IP.String())
+			state.SetPeerName(h.PeerID, h.Name)
+			state.SetPeerPubKey(h.PeerID, h.PublicKey)
+			state.SaveConnection(h.PeerID, conn)
+
+			if h.EphemeralPub != "" {
+				peerPub, _ := hex.DecodeString(h.EphemeralPub)
+				state.Mu.RLock()
+				mySec := state.EphemeralPriv
+				state.Mu.RUnlock()
+
+				sharedKey := crypto.ComputeSharedSecret(mySec, peerPub)
+				if sharedKey != nil {
+					state.SetSessionKey(h.PeerID, sharedKey)
+				}
+			}
+
+			log.Printf("[SECURITY] SECURE E2EE Handshake ACK Received: %s. Ready.", h.PeerID)
 
 		case "ack":
 			var msgID string
 			json.Unmarshal(packet.Payload, &msgID)
 			if remotePeerID != "" {
 				storage.MarkDelivered(remotePeerID, msgID)
-				log.Printf("[DELIVERY] Confirmed message %s for %s", msgID, remotePeerID)
 			}
 
 		case "chat":
 			var c ChatPayload
 			json.Unmarshal(packet.Payload, &c)
-
-			state.Mu.RLock()
-			myID := state.Identity.PeerID
-			state.Mu.RUnlock()
-
-			if c.TargetID != "" && c.TargetID != myID {
-				log.Printf("[SECURITY] Rejected message from %s: intended for %s, but I am %s",
-					c.SenderID, c.TargetID, myID)
-				continue
-			}
-
-			senderID := c.SenderID
-			if senderID == "" {
-				senderID = remotePeerID
-			}
-
-			if senderID != "" {
-
-				if storage.MessageExists(senderID, c.ID) {
-					sendAck(conn, c.ID)
-					continue
-				}
-
-				remoteIP := conn.RemoteAddr().(*net.TCPAddr).IP.String()
-				state.UpdatePeer(senderID, remoteIP)
-
-				msgTime := c.Timestamp
-				if msgTime == 0 {
-					msgTime = time.Now().UnixMilli()
-				}
-
-				log.Printf("[CHAT] From %s: %s", senderID, c.Content)
-
-				entity := storage.MessageEntity{
-					ID:        c.ID,
-					Parents:   c.Parents,
-					Sender:    senderID,
-					Text:      c.Content,
-					Timestamp: msgTime,
-					Delivered: true,
-				}
-				storage.SaveMessage(senderID, entity)
-				state.SetLastMsgID(senderID, c.ID)
-
-				if uiEvents != nil {
-					uiEvents <- models.WSEvent{
-						Type: "new_message",
-						Payload: map[string]interface{}{
-							"id":        c.ID,
-							"sender":    senderID,
-							"text":      c.Content,
-							"timestamp": msgTime,
-						},
-					}
-				}
-
-				sendAck(conn, c.ID)
-			}
+			processIncomingChat(c, conn, state, uiEvents, remotePeerID)
 
 		case "sync_request":
 			var req SyncRequestPayload
 			json.Unmarshal(packet.Payload, &req)
 
-			missing := findMissingMessages(remotePeerID, req.Heads)
-			if len(missing) > 0 {
-				log.Printf("[GOSSIP] Sending %d missing messages to %s", len(missing), remotePeerID)
+			if remotePeerID == "" {
+				remotePeerID = req.PeerID
+			}
+
+			missingEntities := findMissingMessages(remotePeerID, req.Heads)
+			if len(missingEntities) > 0 {
 				state.Mu.RLock()
 				myID := state.Identity.PeerID
+				privKey := state.Identity.PrivateKey
 				state.Mu.RUnlock()
+				sessionKey := state.GetSessionKey(remotePeerID)
 
-				resp := SyncResponsePayload{
-					PeerID:   myID,
-					Messages: missing,
+				var secureMessages []ChatPayload
+				for _, msg := range missingEntities {
+					chat := ChatPayload{
+						ID: msg.ID, Parents: msg.Parents, Content: msg.Text,
+						SenderID: msg.Sender, TargetID: remotePeerID, Timestamp: msg.Timestamp,
+					}
+					if sessionKey != nil {
+						ctxt, nonce, _ := crypto.EncryptAES(sessionKey, []byte(chat.Content))
+						chat.Content = hex.EncodeToString(ctxt)
+						chat.Nonce = hex.EncodeToString(nonce)
+					}
+					chat.Signature = crypto.SignMessage(privKey, chat.ID)
+					secureMessages = append(secureMessages, chat)
 				}
+
+				resp := SyncResponsePayload{PeerID: myID, Messages: secureMessages}
 				data, _ := json.Marshal(resp)
 				respPacket := Packet{Type: "sync_response", Payload: data}
 				packetData, _ := json.Marshal(respPacket)
-				binary.Write(conn, binary.BigEndian, int32(len(packetData)))
-				conn.Write(packetData)
+				sendDataSafe(conn, packetData)
 			}
 
 		case "sync_response":
 			var resp SyncResponsePayload
 			json.Unmarshal(packet.Payload, &resp)
-
-			log.Printf("[GOSSIP] Received %d missing messages from %s", len(resp.Messages), remotePeerID)
-			for _, msg := range resp.Messages {
-				if !storage.MessageExists(remotePeerID, msg.ID) {
-					storage.SaveMessage(remotePeerID, msg)
-					if uiEvents != nil {
-						uiEvents <- models.WSEvent{
-							Type: "new_message",
-							Payload: map[string]interface{}{
-								"id":        msg.ID,
-								"sender":    msg.Sender,
-								"text":      msg.Text,
-								"timestamp": msg.Timestamp,
-							},
-						}
-					}
-				}
+			for _, c := range resp.Messages {
+				processIncomingChat(c, conn, state, uiEvents, remotePeerID)
 			}
 		}
 	}
+}
+
+func processIncomingChat(c ChatPayload, conn net.Conn, state *core.NodeState, uiEvents chan models.WSEvent, remotePeerID string) {
+	state.Mu.RLock()
+	myID := state.Identity.PeerID
+	state.Mu.RUnlock()
+
+	if c.TargetID != "" && c.TargetID != myID {
+		return
+	}
+
+	senderID := c.SenderID
+	if senderID == "" {
+		senderID = remotePeerID
+	}
+
+	senderPubKey := state.GetPeerPubKey(senderID)
+	if senderPubKey != "" && !crypto.VerifySignature(senderPubKey, c.ID, c.Signature) {
+		log.Printf("[SECURITY] ALERT! Invalid signature from %s. Message dropped.", senderID)
+		return
+	}
+
+	sessionKey := state.GetSessionKey(senderID)
+	if sessionKey != nil && c.Nonce != "" {
+		ctxt, _ := hex.DecodeString(c.Content)
+		nonce, _ := hex.DecodeString(c.Nonce)
+		plaintext, err := crypto.DecryptAES(sessionKey, nonce, ctxt)
+		if err != nil {
+			log.Printf("[SECURITY] Decryption failed for message %s: %v", c.ID, err)
+			return
+		}
+		c.Content = string(plaintext)
+	}
+
+	if storage.MessageExists(senderID, c.ID) {
+		sendAck(conn, c.ID)
+		return
+	}
+
+	remoteIP := conn.RemoteAddr().(*net.TCPAddr).IP.String()
+	state.UpdatePeer(senderID, remoteIP)
+
+	log.Printf("[CHAT] Secured Msg from %s: %s", senderID, c.Content)
+
+	entity := storage.MessageEntity{
+		ID: c.ID, Parents: c.Parents, Sender: senderID, Text: c.Content,
+		Timestamp: c.Timestamp, Delivered: true,
+	}
+	storage.SaveMessage(senderID, entity)
+	state.SetLastMsgID(senderID, c.ID)
+
+	if uiEvents != nil {
+		uiEvents <- models.WSEvent{
+			Type: "new_message",
+			Payload: map[string]interface{}{
+				"id": c.ID, "sender": senderID, "text": c.Content, "timestamp": c.Timestamp,
+			},
+		}
+	}
+	sendAck(conn, c.ID)
 }
 
 func findMissingMessages(peerID string, remoteHeads []string) []storage.MessageEntity {
@@ -225,12 +304,10 @@ func findMissingMessages(peerID string, remoteHeads []string) []storage.MessageE
 	if len(history) == 0 {
 		return nil
 	}
-
 	known := make(map[string]bool)
 	for _, h := range remoteHeads {
 		known[h] = true
 	}
-
 	var missing []storage.MessageEntity
 	for i := len(history) - 1; i >= 0; i-- {
 		msg := history[i]
@@ -239,7 +316,6 @@ func findMissingMessages(peerID string, remoteHeads []string) []storage.MessageE
 		}
 		missing = append(missing, msg)
 	}
-
 	return missing
 }
 
@@ -247,9 +323,7 @@ func sendAck(conn net.Conn, msgID string) {
 	data, _ := json.Marshal(msgID)
 	packet := Packet{Type: "ack", Payload: data}
 	packetData, _ := json.Marshal(packet)
-
-	binary.Write(conn, binary.BigEndian, int32(len(packetData)))
-	conn.Write(packetData)
+	sendDataSafe(conn, packetData)
 }
 
 func ResendPendingMessages(state *core.NodeState, peerID string, uiEvents chan models.WSEvent) {
@@ -258,8 +332,6 @@ func ResendPendingMessages(state *core.NodeState, peerID string, uiEvents chan m
 		return
 	}
 
-	log.Printf("[RETRY] Resending %d messages to %s...", len(pending), peerID)
-
 	state.Mu.RLock()
 	myID := state.Identity.PeerID
 	ip := state.Peers[peerID]
@@ -267,16 +339,10 @@ func ResendPendingMessages(state *core.NodeState, peerID string, uiEvents chan m
 
 	for _, msg := range pending {
 		chat := ChatPayload{
-			ID:        msg.ID,
-			Parents:   msg.Parents,
-			Content:   msg.Text,
-			SenderID:  myID,
-			TargetID:  peerID,
-			Timestamp: msg.Timestamp,
+			ID: msg.ID, Parents: msg.Parents, Content: msg.Text,
+			SenderID: myID, TargetID: peerID, Timestamp: msg.Timestamp,
 		}
-
 		if err := SendPacket(state, uiEvents, peerID, ip, "chat", chat); err != nil {
-			log.Printf("[RETRY] Failed to resend %s: %v", msg.ID, err)
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -299,9 +365,10 @@ func SendPacket(state *core.NodeState, uiEvents chan models.WSEvent, targetPeerI
 
 		state.Mu.RLock()
 		h := HandshakePayload{
-			PeerID:    state.Identity.PeerID,
-			PublicKey: state.Identity.PublicKey,
-			Name:      displayName,
+			PeerID:       state.Identity.PeerID,
+			PublicKey:    state.Identity.PublicKey,
+			Name:         displayName,
+			EphemeralPub: hex.EncodeToString(state.EphemeralPub),
 		}
 		state.Mu.RUnlock()
 
@@ -309,8 +376,10 @@ func SendPacket(state *core.NodeState, uiEvents chan models.WSEvent, targetPeerI
 		hPacket := Packet{Type: "handshake", Payload: hData}
 		hBytes, _ := json.Marshal(hPacket)
 
-		binary.Write(newConn, binary.BigEndian, int32(len(hBytes)))
-		newConn.Write(hBytes)
+		if err := sendDataSafe(newConn, hBytes); err != nil {
+			newConn.Close()
+			return err
+		}
 
 		if targetPeerID != "" {
 			state.SaveConnection(targetPeerID, newConn)
@@ -318,6 +387,34 @@ func SendPacket(state *core.NodeState, uiEvents chan models.WSEvent, targetPeerI
 
 		go handleConnection(newConn, state, uiEvents)
 		conn = newConn
+
+		// Умное ожидание установки ключа: ждем ACK от другой стороны до 2 секунд
+		for i := 0; i < 20; i++ {
+			if state.GetSessionKey(targetPeerID) != nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	if pType == "chat" {
+		if chat, ok := payload.(ChatPayload); ok {
+			state.Mu.RLock()
+			privKeyHex := state.Identity.PrivateKey
+			state.Mu.RUnlock()
+
+			chat.Signature = crypto.SignMessage(privKeyHex, chat.ID)
+
+			sessionKey := state.GetSessionKey(targetPeerID)
+			if sessionKey != nil {
+				ctxt, nonce, _ := crypto.EncryptAES(sessionKey, []byte(chat.Content))
+				chat.Content = hex.EncodeToString(ctxt)
+				chat.Nonce = hex.EncodeToString(nonce)
+			} else {
+				log.Println("[SECURITY] Warning: Sending unencrypted (No session key yet)")
+			}
+			payload = chat
+		}
 	}
 
 	data, _ := json.Marshal(payload)
@@ -327,21 +424,11 @@ func SendPacket(state *core.NodeState, uiEvents chan models.WSEvent, targetPeerI
 	}
 	packetData, _ := json.Marshal(packet)
 
-	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	err := binary.Write(conn, binary.BigEndian, int32(len(packetData)))
-	if err != nil {
+	if err := sendDataSafe(conn, packetData); err != nil {
 		conn.Close()
 		state.RemoveConnection(targetPeerID)
 		return err
 	}
-
-	_, err = conn.Write(packetData)
-	if err != nil {
-		conn.Close()
-		state.RemoveConnection(targetPeerID)
-		return err
-	}
-	conn.SetWriteDeadline(time.Time{})
 
 	return nil
 }

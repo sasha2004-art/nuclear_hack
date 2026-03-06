@@ -10,9 +10,14 @@ import (
 	"plotix_core/core"
 	"plotix_core/crypto"
 	"plotix_core/models"
+	"plotix_core/storage"
 )
 
 func TestHandleGetPeers(t *testing.T) {
+	// FIX: Инициализируем временную in-memory БД для тестирования
+	storage.InitDB(t.TempDir())
+	defer storage.CloseDB()
+
 	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
 	state.Mu.Lock()
 	state.Peers["test_peer_1"] = "192.168.1.10"
@@ -41,13 +46,17 @@ func TestHandleGetPeers(t *testing.T) {
 	}
 }
 
-func TestHandleSendMessage_PeerNotFound(t *testing.T) {
+func TestHandleSendMessage_OfflineQueuing(t *testing.T) {
+	// FIX: Инициализируем временную БД
+	storage.InitDB(t.TempDir())
+	defer storage.CloseDB()
+
 	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
 	server := NewServer(state, nil, nil)
 
 	payload := models.SendMessageReq{
-		PeerID:  "nonexistent_peer",
-		Message: "Привет, тест!",
+		PeerID:  "offline_peer_id",
+		Message: "Привет, тест для оффлайна!",
 	}
 	body, _ := json.Marshal(payload)
 
@@ -57,12 +66,18 @@ func TestHandleSendMessage_PeerNotFound(t *testing.T) {
 
 	server.handleSendMessage(rr, req)
 
-	if status := rr.Code; status != http.StatusNotFound {
-		t.Errorf("Ожидался статус %v, получен %v", http.StatusNotFound, status)
+	// Теперь, когда пир не найден, система не должна падать с 404 (Not Found).
+	// Она должна поместить сообщение в локальную БД со статусом Delivered = false
+	// и вернуть статус 200 (OK).
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("Ожидался статус %v, получен %v", http.StatusOK, status)
 	}
 }
 
 func TestHandleSendMessage_InvalidMethod(t *testing.T) {
+	storage.InitDB(t.TempDir())
+	defer storage.CloseDB()
+
 	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
 	server := NewServer(state, nil, nil)
 

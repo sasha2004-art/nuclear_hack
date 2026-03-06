@@ -11,29 +11,65 @@ import (
 var StartTime = time.Now()
 
 type NodeState struct {
-	Mu          sync.RWMutex
-	Identity    *crypto.Identity
-	Peers       map[string]string
-	PeerNames   map[string]string
-	PeerAliases map[string]string
-	LastSeen    map[string]time.Time
-	ActiveConns map[string]net.Conn
-	NewPeerChan chan string
-	LastMsgIDs  map[string]string
-	DisplayName func() string
+	Mu            sync.RWMutex
+	Identity      *crypto.Identity
+	Peers         map[string]string
+	PeerNames     map[string]string
+	PeerAliases   map[string]string
+	LastSeen      map[string]time.Time
+	ActiveConns   map[string]net.Conn
+	NewPeerChan   chan string
+	LastMsgIDs    map[string]string
+	DisplayName   func() string
+
+	// E2EE Данные
+	EphemeralPriv []byte
+	EphemeralPub  []byte
+	SessionKeys   map[string][]byte // peerID -> AES Key
+	PeerPubKeys   map[string]string // peerID -> Ed25519 PubKey
 }
 
 func NewNodeState(ident *crypto.Identity) *NodeState {
+	ePriv, ePub, _ := crypto.GenerateEphemeralKeys()
+
 	return &NodeState{
-		Identity:    ident,
-		Peers:       make(map[string]string),
-		PeerNames:   make(map[string]string),
-		PeerAliases: make(map[string]string),
-		LastSeen:    make(map[string]time.Time),
-		ActiveConns: make(map[string]net.Conn),
-		NewPeerChan: make(chan string, 10),
-		LastMsgIDs:  make(map[string]string),
+		Identity:      ident,
+		Peers:         make(map[string]string),
+		PeerNames:     make(map[string]string),
+		PeerAliases:   make(map[string]string),
+		LastSeen:      make(map[string]time.Time),
+		ActiveConns:   make(map[string]net.Conn),
+		NewPeerChan:   make(chan string, 10),
+		LastMsgIDs:    make(map[string]string),
+		EphemeralPriv: ePriv,
+		EphemeralPub:  ePub,
+		SessionKeys:   make(map[string][]byte),
+		PeerPubKeys:   make(map[string]string),
 	}
+}
+
+func (s *NodeState) SetPeerPubKey(peerID, pubKey string) {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	s.PeerPubKeys[peerID] = pubKey
+}
+
+func (s *NodeState) GetPeerPubKey(peerID string) string {
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+	return s.PeerPubKeys[peerID]
+}
+
+func (s *NodeState) SetSessionKey(peerID string, key []byte) {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	s.SessionKeys[peerID] = key
+}
+
+func (s *NodeState) GetSessionKey(peerID string) []byte {
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+	return s.SessionKeys[peerID]
 }
 
 func (s *NodeState) UpdateLastSeen(peerID string) {

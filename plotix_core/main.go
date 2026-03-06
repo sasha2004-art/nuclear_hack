@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"embed"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -90,7 +91,6 @@ func main() {
 			mgr.Save()
 		}
 	} else {
-
 		activeID := mgr.LoadActive()
 		if activeID == "" || !mgr.HasAccount(activeID) {
 			activeID = mgr.Accounts[0].PeerID
@@ -172,10 +172,12 @@ func main() {
 				displayName = state.DisplayName()
 			}
 			state.Mu.RLock()
+			// ИСПРАВЛЕНИЕ: Добавили EphemeralPub в первоначальный пакет
 			h := transport.HandshakePayload{
-				PeerID:    state.Identity.PeerID,
-				PublicKey: state.Identity.PublicKey,
-				Name:      displayName,
+				PeerID:       state.Identity.PeerID,
+				PublicKey:    state.Identity.PublicKey,
+				Name:         displayName,
+				EphemeralPub: hex.EncodeToString(state.EphemeralPub),
 			}
 			state.Mu.RUnlock()
 			if err := transport.SendPacket(state, server.Broadcast, "", ip, "handshake", h); err != nil {

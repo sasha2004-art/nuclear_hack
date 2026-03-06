@@ -16,6 +16,13 @@ def run_go_tests():
         print(f"[FAIL] Ошибка: Папка ядра не найдена по пути {core_dir}")
         sys.exit(1)
 
+    # FIX: Создаем заглушку для ui_dist, чтобы директива //go:embed не вызывала ошибку компиляции
+    ui_dist_dir = os.path.join(core_dir, "ui_dist")
+    if not os.path.exists(ui_dist_dir):
+        os.makedirs(ui_dist_dir, exist_ok=True)
+        with open(os.path.join(ui_dist_dir, "index.html"), "w", encoding="utf-8") as f:
+            f.write("<!-- Dummy for tests -->")
+
     try:
         result = subprocess.run(
             ["go", "test", "-v", "./..."],
