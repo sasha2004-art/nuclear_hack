@@ -2,9 +2,7 @@ name: iOS_Build
 
 on:
   push:
-    branches: [ "main", "master", "mobile" ]
   pull_request:
-    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -24,6 +22,7 @@ jobs:
           cache: 'gradle'
 
       - name: Cache Kotlin Native
+        # Кэшируем компилятор Kotlin/Native и его части
         uses: actions/cache@v4
         with:
           path: ~/.konan
@@ -35,11 +34,14 @@ jobs:
 
       - name: Build Kotlin Framework
         working-directory: ./plotix_mobile
+        # Собираем общую логику и Compose под iOS
         run: ./gradlew :composeApp:assembleRelease
 
       - name: Build iOS Bundle (.app)
         working-directory: ./plotix_mobile/iosApp
         run: |
+          # Собираем непосредственно само iOS приложение (оболочку)
+          # Используем xcodebuild, отключая проверку подписей
           xcodebuild -scheme iosApp \
             -sdk iphoneos \
             -configuration Release \
@@ -48,22 +50,18 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-      - name: Package IPA
+      - name: Zip iOS App
+        # Sideloadly лучше всего кушает .zip файлы (которые он воспринимает как .ipa)
+        # Упаковываем .app папку в архив
         working-directory: ./plotix_mobile/iosApp
         run: |
-          # Переходим в папку с билдом
           cd build-data/Build/Products/Release-iphoneos
-          # Создаем структуру Payload для корректного IPA
-          mkdir Payload
-          cp -r iosApp.app Payload/
-          # Архивируем
-          zip -r Plotix_iOS.ipa Payload
-          # Перемещаем в корень репозитория для удобства загрузки
-          mv Plotix_iOS.ipa ../../../../../
+          zip -r ../../../../Plotix_iOS.zip *.app
 
-      - name: Upload Artifact
+      - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
           name: Plotix_iOS_Installation_File
-          path: Plotix_iOS.ipa
+          # Путь к нашему архиву
+          path: plotix_mobile/iosApp/Plotix_iOS.zip
           retention-days: 5
