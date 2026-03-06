@@ -84,7 +84,7 @@ const handleSend = async () => {
         </header>
 
         <div ref="scrollContainer" class="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-900">
-            <div v-for="(msg, idx) in messages" :key="idx"
+            <div v-for="(msg, idx) in messages" :key="msg.id || idx"
                 :class="['flex', msg.self ? 'justify-end' : 'justify-start']">
                 <div :class="[
                     'max-w-[70%] p-3 rounded-2xl text-sm shadow-sm',

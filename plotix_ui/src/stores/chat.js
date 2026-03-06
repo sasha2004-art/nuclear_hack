@@ -113,14 +113,25 @@ export const useChatStore = defineStore('chat', {
             }
         },
 
-        pushMessage(peerId, text, isSelf) {
+        pushMessage(peerId, payload, isSelf) {
             if (!this.messages[peerId]) {
                 this.messages[peerId] = [];
             }
+
+            const id = typeof payload === 'object' ? payload.id : undefined;
+            const text = typeof payload === 'object' ? payload.text : payload;
+            const timestamp = typeof payload === 'object' && payload.timestamp ? payload.timestamp : Date.now();
+
+            
+            if (id && this.messages[peerId].find(m => m.id === id)) {
+                return;
+            }
+
             this.messages[peerId].push({
+                id,
                 text,
                 self: isSelf,
-                timestamp: Date.now()
+                timestamp
             });
             this.messages[peerId].sort((a, b) => a.timestamp - b.timestamp);
             this.messages = { ...this.messages };
@@ -132,6 +143,7 @@ export const useChatStore = defineStore('chat', {
                 if (res.data && res.data.length > 0) {
                     res.data.sort((a, b) => a.timestamp - b.timestamp);
                     this.messages[peerId] = res.data.map(m => ({
+                        id: m.id,
                         text: m.text,
                         self: m.sender === this.myId,
                         timestamp: m.timestamp,
@@ -159,7 +171,7 @@ export const useChatStore = defineStore('chat', {
             socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'new_message') {
-                    this.pushMessage(data.payload.sender, data.payload.text, false);
+                    this.pushMessage(data.payload.sender, data.payload, false);
                 }
                 if (data.type === 'account_switched') {
                     this.messages = {};

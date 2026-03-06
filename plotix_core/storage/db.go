@@ -143,6 +143,42 @@ func GetAllContacts() (map[string]string, error) {
 	return contacts, err
 }
 
+func MessageExists(peerID, msgID string) bool {
+	exists := false
+	db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte("messages"))
+		if b == nil {
+			return nil
+		}
+		peerBucket := b.Bucket([]byte(peerID))
+		if peerBucket == nil {
+			return nil
+		}
+		if peerBucket.Get([]byte(msgID)) != nil {
+			exists = true
+		}
+		return nil
+	})
+	return exists
+}
+
+func GetKnownPeers() ([]string, error) {
+	var peers []string
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte("messages"))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			if v == nil {
+				peers = append(peers, string(k))
+			}
+			return nil
+		})
+	})
+	return peers, err
+}
+
 func CloseDB() {
 	if db != nil {
 		db.Close()

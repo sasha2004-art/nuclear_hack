@@ -13,8 +13,9 @@ import (
 )
 
 type PeerEntry struct {
-	IP   string `json:"ip"`
-	Name string `json:"name,omitempty"`
+	IP     string `json:"ip"`
+	Name   string `json:"name,omitempty"`
+	Online bool   `json:"online"`
 }
 
 func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
@@ -23,19 +24,52 @@ func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.state.Mu.RLock()
 	result := make(map[string]PeerEntry)
+
+	s.state.Mu.RLock()
+	now := time.Now()
 	for id, ip := range s.state.Peers {
 		name := s.state.PeerAliases[id]
 		if name == "" {
 			name = s.state.PeerNames[id]
 		}
+		isOnline := false
+		if last, ok := s.state.LastSeen[id]; ok {
+			isOnline = now.Sub(last) < 12*time.Second
+		}
 		result[id] = PeerEntry{
-			IP:   ip,
-			Name: name,
+			IP:     ip,
+			Name:   name,
+			Online: isOnline,
 		}
 	}
 	s.state.Mu.RUnlock()
+
+	knownPeers, _ := storage.GetKnownPeers()
+
+	s.state.Mu.RLock()
+	for _, id := range knownPeers {
+		if _, exists := result[id]; !exists {
+			name := s.state.PeerAliases[id]
+			result[id] = PeerEntry{
+				IP:     "",
+				Name:   name,
+				Online: false,
+			}
+		}
+	}
+	s.state.Mu.RUnlock()
+
+	contacts, _ := storage.GetAllContacts()
+	for id, name := range contacts {
+		if _, exists := result[id]; !exists {
+			result[id] = PeerEntry{
+				IP:     "",
+				Name:   name,
+				Online: false,
+			}
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
@@ -54,26 +88,12 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.state.Mu.RLock()
-	ip, exists := s.state.Peers[req.PeerID]
+	ip, online := s.state.Peers[req.PeerID]
 	s.state.Mu.RUnlock()
-
-	if !exists {
-		http.Error(w, "Peer not found", http.StatusNotFound)
-		return
-	}
 
 	parents := s.state.GetLastMsgID(req.PeerID)
 	msgID := transport.CalculateHash(req.Message, parents)
 	now := time.Now().UnixMilli()
-
-	chat := transport.ChatPayload{
-		ID:        msgID,
-		Parents:   parents,
-		Content:   req.Message,
-		SenderID:  s.state.Identity.PeerID,
-		TargetID:  req.PeerID,
-		Timestamp: now,
-	}
 
 	entity := storage.MessageEntity{
 		ID:        msgID,
@@ -86,8 +106,20 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	storage.SaveMessage(req.PeerID, entity)
 	s.state.SetLastMsgID(req.PeerID, msgID)
 
-	if err := transport.SendPacket(s.state, s.Broadcast, req.PeerID, ip, "chat", chat); err != nil {
-		log.Printf("[API] Send failed, queued for retry: %v", err)
+	if online {
+		chat := transport.ChatPayload{
+			ID:        msgID,
+			Parents:   parents,
+			Content:   req.Message,
+			SenderID:  s.state.Identity.PeerID,
+			TargetID:  req.PeerID,
+			Timestamp: now,
+		}
+		if err := transport.SendPacket(s.state, s.Broadcast, req.PeerID, ip, "chat", chat); err != nil {
+			log.Printf("[API] Send failed, queued for retry: %v", err)
+		}
+	} else {
+		log.Printf("[API] Peer %s offline, message saved for later delivery", req.PeerID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

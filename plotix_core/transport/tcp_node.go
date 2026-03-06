@@ -37,6 +37,9 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 	defer func() {
 		if remotePeerID != "" {
 			state.RemoveConnection(remotePeerID)
+			state.Mu.Lock()
+			delete(state.LastSeen, remotePeerID)
+			state.Mu.Unlock()
 			log.Printf("[TRANSPORT] Connection with %s closed", remotePeerID)
 		}
 		conn.Close()
@@ -109,6 +112,12 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 			}
 
 			if senderID != "" {
+
+				if storage.MessageExists(senderID, c.ID) {
+					sendAck(conn, c.ID)
+					continue
+				}
+
 				remoteIP := conn.RemoteAddr().(*net.TCPAddr).IP.String()
 				state.UpdatePeer(senderID, remoteIP)
 
@@ -133,9 +142,11 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 				if uiEvents != nil {
 					uiEvents <- models.WSEvent{
 						Type: "new_message",
-						Payload: map[string]string{
-							"sender": senderID,
-							"text":   c.Content,
+						Payload: map[string]interface{}{
+							"id":        c.ID,
+							"sender":    senderID,
+							"text":      c.Content,
+							"timestamp": msgTime,
 						},
 					}
 				}

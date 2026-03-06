@@ -67,6 +67,7 @@ func listen(state *core.NodeState, iface *net.Interface) {
 
 		state.UpdatePeer(msg.PeerID, src.IP.String())
 		state.SetPeerName(msg.PeerID, msg.Name)
+		state.UpdateLastSeen(msg.PeerID)
 		log.Printf("[DISCOVERY] Получен сигнал от %s (IP: %s)", msg.PeerID, src.IP.String())
 	}
 }

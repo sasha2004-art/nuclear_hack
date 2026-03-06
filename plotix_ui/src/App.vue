@@ -176,26 +176,40 @@ const confirmRename = async () => {
 
             <nav class="flex-1 overflow-y-auto">
                 <div v-if="Object.keys(store.peers).length === 0" class="p-10 text-center text-gray-500 text-sm">
-                    Search for network participants...
+                    No chats yet...
                 </div>
                 <router-link
-                    v-for="(peer, id) in store.peers"
-                    :key="id"
-                    :to="'/chat/' + encodeURIComponent(id)"
-                    class="flex items-center p-4 border-b border-gray-700/50 hover:bg-gray-700 transition"
+                    v-for="peer in Object.entries(store.peers).sort((a, b) => Number(b[1].online) - Number(a[1].online))"
+                    :key="peer[0]"
+                    :to="'/chat/' + encodeURIComponent(peer[0])"
+                    class="flex items-center p-4 border-b border-gray-700/50 hover:bg-gray-700 transition relative group"
                     active-class="bg-gray-700 border-l-4 border-indigo-500"
                 >
-                    <div
-                        :class="[
-                            'w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0',
-                            getAvatarColor(id)
-                        ]"
-                    >
-                        {{ peer.name ? peer.name.charAt(0).toUpperCase() : id.replace('hex_', '').charAt(0).toUpperCase() }}
+                    <div class="relative">
+                        <div
+                            :class="[
+                                'w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0',
+                                getAvatarColor(peer[0]),
+                                !peer[1].online ? 'opacity-50 grayscale' : ''
+                            ]"
+                        >
+                            {{ peer[1].name ? peer[1].name.charAt(0).toUpperCase() : peer[0].replace('hex_', '').charAt(0).toUpperCase() }}
+                        </div>
+                        <div
+                            class="absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-gray-800"
+                            :class="peer[1].online ? 'bg-green-500' : 'bg-gray-500'"
+                            :title="peer[1].online ? 'Online' : 'Offline'"
+                        ></div>
                     </div>
-                    <div class="ml-3 min-w-0">
-                        <div class="font-medium truncate text-sm">{{ peer.name || truncateId(id) }}</div>
-                        <div class="text-xs text-gray-500 mt-0.5">{{ peer.name ? truncateId(id) : peer.ip }}</div>
+                    <div class="ml-3 min-w-0 flex-1">
+                        <div class="flex justify-between items-baseline">
+                            <div class="font-medium truncate text-sm text-gray-200">
+                                {{ peer[1].name || truncateId(peer[0]) }}
+                            </div>
+                        </div>
+                        <div class="text-xs text-gray-500 truncate mt-0.5">
+                            {{ peer[1].online ? 'Active' : 'Offline' }}
+                        </div>
                     </div>
                 </router-link>
             </nav>
