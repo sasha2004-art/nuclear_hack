@@ -33,6 +33,7 @@ func InitDB(path string) {
 	db.Update(func(tx *bbolt.Tx) error {
 		_, _ = tx.CreateBucketIfNotExists([]byte("messages"))
 		_, _ = tx.CreateBucketIfNotExists([]byte("contacts"))
+		_, _ = tx.CreateBucketIfNotExists([]byte("heads"))
 		return nil
 	})
 
@@ -47,7 +48,33 @@ func SaveMessage(peerID string, msg MessageEntity) error {
 			return err
 		}
 		data, _ := json.Marshal(msg)
-		return peerBucket.Put([]byte(msg.ID), data)
+		if err := peerBucket.Put([]byte(msg.ID), data); err != nil {
+			return err
+		}
+
+		h := tx.Bucket([]byte("heads"))
+		var currentHeads []string
+		headData := h.Get([]byte(peerID))
+		if headData != nil {
+			json.Unmarshal(headData, &currentHeads)
+		}
+
+		newHeads := []string{msg.ID}
+		for _, head := range currentHeads {
+			isParent := false
+			for _, parent := range msg.Parents {
+				if head == parent {
+					isParent = true
+					break
+				}
+			}
+			if !isParent {
+				newHeads = append(newHeads, head)
+			}
+		}
+
+		newHeadData, _ := json.Marshal(newHeads)
+		return h.Put([]byte(peerID), newHeadData)
 	})
 }
 
@@ -73,6 +100,19 @@ func GetHistory(peerID string) ([]MessageEntity, error) {
 	})
 
 	return history, err
+}
+
+func GetHeads(peerID string) []string {
+	var heads []string
+	db.View(func(tx *bbolt.Tx) error {
+		h := tx.Bucket([]byte("heads"))
+		data := h.Get([]byte(peerID))
+		if data != nil {
+			json.Unmarshal(data, &heads)
+		}
+		return nil
+	})
+	return heads
 }
 
 func MarkDelivered(peerID, msgID string) error {

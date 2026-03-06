@@ -80,9 +80,28 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 			state.SetPeerName(h.PeerID, h.Name)
 			state.SaveConnection(h.PeerID, conn)
 
-			log.Printf("[TRANSPORT] Handshake OK: %s connected", h.PeerID)
+			log.Printf("[TRANSPORT] Handshake OK: %s connected. Starting Gossip Sync...", h.PeerID)
 
 			go ResendPendingMessages(state, h.PeerID, uiEvents)
+
+			go func() {
+				myHeads := storage.GetHeads(h.PeerID)
+				state.Mu.RLock()
+				myID := state.Identity.PeerID
+				state.Mu.RUnlock()
+				syncReq := SyncRequestPayload{
+					PeerID: myID,
+					Heads:  myHeads,
+				}
+				reqData, _ := json.Marshal(syncReq)
+				syncPacket := Packet{Type: "sync_request", Payload: reqData}
+				packetData, _ := json.Marshal(syncPacket)
+				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				binary.Write(conn, binary.BigEndian, int32(len(packetData)))
+				conn.Write(packetData)
+				conn.SetWriteDeadline(time.Time{})
+				log.Printf("[GOSSIP] Sent sync_request to %s with %d heads", h.PeerID, len(myHeads))
+			}()
 
 		case "ack":
 			var msgID string
@@ -153,8 +172,75 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 
 				sendAck(conn, c.ID)
 			}
+
+		case "sync_request":
+			var req SyncRequestPayload
+			json.Unmarshal(packet.Payload, &req)
+
+			missing := findMissingMessages(remotePeerID, req.Heads)
+			if len(missing) > 0 {
+				log.Printf("[GOSSIP] Sending %d missing messages to %s", len(missing), remotePeerID)
+				state.Mu.RLock()
+				myID := state.Identity.PeerID
+				state.Mu.RUnlock()
+
+				resp := SyncResponsePayload{
+					PeerID:   myID,
+					Messages: missing,
+				}
+				data, _ := json.Marshal(resp)
+				respPacket := Packet{Type: "sync_response", Payload: data}
+				packetData, _ := json.Marshal(respPacket)
+				binary.Write(conn, binary.BigEndian, int32(len(packetData)))
+				conn.Write(packetData)
+			}
+
+		case "sync_response":
+			var resp SyncResponsePayload
+			json.Unmarshal(packet.Payload, &resp)
+
+			log.Printf("[GOSSIP] Received %d missing messages from %s", len(resp.Messages), remotePeerID)
+			for _, msg := range resp.Messages {
+				if !storage.MessageExists(remotePeerID, msg.ID) {
+					storage.SaveMessage(remotePeerID, msg)
+					if uiEvents != nil {
+						uiEvents <- models.WSEvent{
+							Type: "new_message",
+							Payload: map[string]interface{}{
+								"id":        msg.ID,
+								"sender":    msg.Sender,
+								"text":      msg.Text,
+								"timestamp": msg.Timestamp,
+							},
+						}
+					}
+				}
+			}
 		}
 	}
+}
+
+func findMissingMessages(peerID string, remoteHeads []string) []storage.MessageEntity {
+	history, _ := storage.GetHistory(peerID)
+	if len(history) == 0 {
+		return nil
+	}
+
+	known := make(map[string]bool)
+	for _, h := range remoteHeads {
+		known[h] = true
+	}
+
+	var missing []storage.MessageEntity
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if known[msg.ID] {
+			break
+		}
+		missing = append(missing, msg)
+	}
+
+	return missing
 }
 
 func sendAck(conn net.Conn, msgID string) {

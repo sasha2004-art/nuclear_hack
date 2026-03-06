@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+
+	"plotix_core/storage"
 )
 
 type Packet struct {
@@ -24,6 +26,16 @@ type ChatPayload struct {
 	SenderID  string   `json:"sender_id"`
 	TargetID  string   `json:"target_id"`
 	Timestamp int64    `json:"timestamp"`
+}
+
+type SyncRequestPayload struct {
+	PeerID string   `json:"peer_id"`
+	Heads  []string `json:"heads"`
+}
+
+type SyncResponsePayload struct {
+	PeerID   string                  `json:"peer_id"`
+	Messages []storage.MessageEntity `json:"messages"`
 }
 
 func CalculateHash(content string, parents []string) string {
