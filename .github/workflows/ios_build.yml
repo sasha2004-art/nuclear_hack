@@ -2,13 +2,15 @@ name: iOS_Build
 
 on:
   push:
-    branches: [ "mobile" ]
-    # Совет: запускать сборку только если изменились файлы в папке mobile-app
-    paths:
-      - 'plotix_mobile/**'
+  # Срабатывает на пуш в ЛЮБУЮ ветку
+  pull_request:
+  # Срабатывает при создании PR в ЛЮБУЮ ветку
+  workflow_dispatch:
+  # Позволяет запустить сборку вручную кнопкой на сайте GitHub
 
 jobs:
   build:
+    name: Build iOS App
     runs-on: macos-latest
 
     steps:
@@ -21,11 +23,25 @@ jobs:
           java-version: '17'
           distribution: 'zulu'
 
+      - name: Validate Gradle Wrapper
+        # Проверка безопасности gradle (хорошая практика)
+        uses: gradle/actions/wrapper-validation@v3
+
       - name: Grant execute permission for gradlew
-        # Указываем путь к файлу gradlew относительно корня
+        # Указываем путь относительно корня репозитория
         run: chmod +x ./plotix_mobile/gradlew
 
-      - name: Build iOS App
-        # Указываем, в какой папке выполнять команду
+      - name: Build iOS Application
+        # Указываем папку, где лежит мобильное приложение
         working-directory: ./plotix_mobile
+        # assembleRelease запустит сборку Kotlin-кода под iOS
         run: ./gradlew :composeApp:assembleRelease
+
+      - name: Upload Artifacts
+        # Если сборка прошла успешно, можно будет скачать результат
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-result
+          path: plotix_mobile/composeApp/build/outputs/
+          retention-days: 5
