@@ -17,6 +17,7 @@ const (
 
 type AnnounceMsg struct {
 	PeerID string `json:"peer_id"`
+	Name   string `json:"name,omitempty"`
 }
 
 func Start(state *core.NodeState, ifaceName string) {
@@ -32,7 +33,7 @@ func Start(state *core.NodeState, ifaceName string) {
 
 	go listen(state, iface)
 
-	go broadcast(state.Identity.PeerID, localIP, mAddr, bAddr)
+	go broadcast(state, localIP, mAddr, bAddr)
 }
 
 func listen(state *core.NodeState, iface *net.Interface) {
@@ -56,29 +57,41 @@ func listen(state *core.NodeState, iface *net.Interface) {
 			continue
 		}
 
-		if msg.PeerID == state.Identity.PeerID {
+		state.Mu.RLock()
+		selfID := state.Identity.PeerID
+		state.Mu.RUnlock()
+
+		if msg.PeerID == selfID {
 			continue
 		}
 
 		state.UpdatePeer(msg.PeerID, src.IP.String())
+		state.SetPeerName(msg.PeerID, msg.Name)
 		log.Printf("[DISCOVERY] Получен сигнал от %s (IP: %s)", msg.PeerID, src.IP.String())
 	}
 }
 
-func broadcast(myPeerID string, localIP net.IP, mAddr, bAddr *net.UDPAddr) {
+func broadcast(state *core.NodeState, localIP net.IP, mAddr, bAddr *net.UDPAddr) {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: localIP, Port: 0})
 	if err != nil {
 		log.Fatalf("[DISCOVERY] Ошибка вещателя: %v", err)
 	}
 	defer conn.Close()
 
-	msg := AnnounceMsg{PeerID: myPeerID}
-	data, _ := json.Marshal(msg)
-
 	for {
+		state.Mu.RLock()
+		peerID := state.Identity.PeerID
+		state.Mu.RUnlock()
+
+		var name string
+		if state.DisplayName != nil {
+			name = state.DisplayName()
+		}
+
+		msg := AnnounceMsg{PeerID: peerID, Name: name}
+		data, _ := json.Marshal(msg)
 
 		conn.WriteToUDP(data, mAddr)
-
 		conn.WriteToUDP(data, bAddr)
 
 		time.Sleep(3 * time.Second)

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"plotix_core/accounts"
 	"plotix_core/core"
 	"plotix_core/models"
 )
@@ -17,19 +18,22 @@ var upgrader = websocket.Upgrader{
 }
 
 type Server struct {
-	state     *core.NodeState
-	clients   map[*websocket.Conn]bool
-	mu        sync.Mutex
-	Broadcast chan models.WSEvent
-	uiFS      fs.FS
+	state         *core.NodeState
+	clients       map[*websocket.Conn]bool
+	mu            sync.Mutex
+	Broadcast     chan models.WSEvent
+	uiFS          fs.FS
+	AccountMgr    *accounts.Manager
+	SwitchAccount func(string) error
 }
 
-func NewServer(state *core.NodeState, uiFS fs.FS) *Server {
+func NewServer(state *core.NodeState, uiFS fs.FS, mgr *accounts.Manager) *Server {
 	s := &Server{
-		state:     state,
-		clients:   make(map[*websocket.Conn]bool),
-		Broadcast: make(chan models.WSEvent, 100),
-		uiFS:      uiFS,
+		state:      state,
+		clients:    make(map[*websocket.Conn]bool),
+		Broadcast:  make(chan models.WSEvent, 100),
+		uiFS:       uiFS,
+		AccountMgr: mgr,
 	}
 	go s.listenBroadcast()
 	return s
@@ -56,6 +60,13 @@ func (s *Server) Start(port string) {
 	mux.HandleFunc("/events", s.handleWSEvents)
 	mux.HandleFunc("/add_peer", s.handleAddPeerManual)
 	mux.HandleFunc("/history", s.handleGetHistory)
+	mux.HandleFunc("/me", s.handleMe)
+	mux.HandleFunc("/accounts", s.handleAccounts)
+	mux.HandleFunc("/accounts/create", s.handleCreateAccount)
+	mux.HandleFunc("/accounts/switch", s.handleSwitchAccount)
+	mux.HandleFunc("/accounts/rename", s.handleRenameAccount)
+	mux.HandleFunc("/accounts/ghost", s.handleSetGhost)
+	mux.HandleFunc("/peer/rename", s.handleRenamePeer)
 
 	if s.uiFS != nil {
 		fileServer := http.FileServer(http.FS(s.uiFS))

@@ -18,7 +18,7 @@ func TestHandleGetPeers(t *testing.T) {
 	state.Peers["test_peer_1"] = "192.168.1.10"
 	state.Mu.Unlock()
 
-	server := NewServer(state, nil)
+	server := NewServer(state, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/peers", nil)
 	rr := httptest.NewRecorder()
@@ -29,20 +29,21 @@ func TestHandleGetPeers(t *testing.T) {
 		t.Errorf("Ожидался статус %v, получен %v", http.StatusOK, status)
 	}
 
-	var response map[string]string
+	var response map[string]PeerEntry
 	err := json.NewDecoder(rr.Body).Decode(&response)
 	if err != nil {
 		t.Fatalf("Ошибка парсинга JSON: %v", err)
 	}
 
-	if ip, ok := response["test_peer_1"]; !ok || ip != "192.168.1.10" {
-		t.Errorf("Ожидался IP 192.168.1.10 для test_peer_1, получено: %v", ip)
+	entry, ok := response["test_peer_1"]
+	if !ok || entry.IP != "192.168.1.10" {
+		t.Errorf("Ожидался IP 192.168.1.10 для test_peer_1, получено: %v", entry.IP)
 	}
 }
 
 func TestHandleSendMessage_PeerNotFound(t *testing.T) {
 	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
-	server := NewServer(state, nil)
+	server := NewServer(state, nil, nil)
 
 	payload := models.SendMessageReq{
 		PeerID:  "nonexistent_peer",
@@ -63,7 +64,7 @@ func TestHandleSendMessage_PeerNotFound(t *testing.T) {
 
 func TestHandleSendMessage_InvalidMethod(t *testing.T) {
 	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
-	server := NewServer(state, nil)
+	server := NewServer(state, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/send_message", nil)
 	rr := httptest.NewRecorder()

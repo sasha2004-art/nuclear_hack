@@ -14,15 +14,18 @@ type Packet struct {
 type HandshakePayload struct {
 	PeerID    string `json:"peer_id"`
 	PublicKey string `json:"public_key"`
+	Name      string `json:"name,omitempty"`
 }
 
 type ChatPayload struct {
-	ID      string   `json:"id"`
-	Parents []string `json:"parents"`
-	Content string   `json:"content"`
+	ID        string   `json:"id"`
+	Parents   []string `json:"parents"`
+	Content   string   `json:"content"`
+	SenderID  string   `json:"sender_id"`
+	TargetID  string   `json:"target_id"`
+	Timestamp int64    `json:"timestamp"`
 }
 
-// CalculateHash создает уникальный ID сообщения на основе контента и родителей
 func CalculateHash(content string, parents []string) string {
 	h := sha256.New()
 	h.Write([]byte(content))

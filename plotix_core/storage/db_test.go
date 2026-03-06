@@ -18,7 +18,6 @@ func TestDBFullCycle(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Сохранение
 	testPeer := "hex_test_peer_456"
 	msg := MessageEntity{
 		ID:        "msg_hash_1",
@@ -33,7 +32,6 @@ func TestDBFullCycle(t *testing.T) {
 		t.Fatalf("Ошибка сохранения: %v", err)
 	}
 
-	// Чтение
 	history, err := GetHistory(testPeer)
 	if err != nil {
 		t.Fatalf("Ошибка получения истории: %v", err)
@@ -47,7 +45,6 @@ func TestDBFullCycle(t *testing.T) {
 		t.Errorf("Текст не совпадает: %s != %s", msg.Text, history[0].Text)
 	}
 
-	// Изоляция бакетов
 	otherHistory, _ := GetHistory("other_peer")
 	if len(otherHistory) != 0 {
 		t.Error("История другого пира должна быть пустой")

@@ -39,6 +39,11 @@ Desktop.ini
 1.py
 2.py
 
+# Account data
+data/
+
 # Claude
 .claude/
 keystore.json
+
+build/
