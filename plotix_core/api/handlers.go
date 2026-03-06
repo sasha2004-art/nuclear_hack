@@ -2,8 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"plotix_core/accounts"
@@ -339,4 +343,94 @@ func (s *Server) handleWSEvents(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+}
+
+func (s *Server) handleSendFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	peerID := r.URL.Query().Get("peer_id")
+	if peerID == "" {
+		http.Error(w, "peer_id required", http.StatusBadRequest)
+		return
+	}
+
+	// 32MB в памяти, остальное сбрасывается во временные файлы ОС (поддержка до 1 ГБ)
+	r.ParseMultipartForm(32 << 20)
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Error retrieving file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	s.state.Mu.RLock()
+	myID := s.state.Identity.PeerID
+	s.state.Mu.RUnlock()
+
+	transferID := transport.GenerateTransferID(handler.Filename + time.Now().String())
+
+	// Создаем папку Outbox
+	outboxDir := filepath.Join(s.AccountMgr.GetAccountDir(myID), "outbox")
+	os.MkdirAll(outboxDir, 0755)
+
+	outPath := filepath.Join(outboxDir, transferID+"_"+handler.Filename)
+	outFile, err := os.Create(outPath)
+	if err != nil {
+		http.Error(w, "Error creating local outbox file", http.StatusInternalServerError)
+		return
+	}
+
+	// Безопасно переливаем гигабайты из HTTP-запроса на диск
+	_, err = io.Copy(outFile, file)
+	outFile.Close()
+	if err != nil {
+		os.Remove(outPath)
+		http.Error(w, "Error writing file to disk", http.StatusInternalServerError)
+		return
+	}
+
+	// Записываем в базу
+	outboxFile := storage.OutboxFile{
+		TransferID: transferID, TargetID: peerID,
+		FilePath: outPath, FileName: handler.Filename, FileSize: handler.Size,
+	}
+	storage.SaveOutboxFile(outboxFile)
+
+	// Запускаем фоновый обработчик очереди. Если пир онлайн — отправит сейчас, если нет — отправит при подключении.
+	go transport.ProcessOutboxForPeer(s.state, s.Broadcast, peerID)
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+}
+
+// handleFileView безопасно отдает файлы из папки data активного аккаунта
+func (s *Server) handleFileView(w http.ResponseWriter, r *http.Request) {
+	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		http.Error(w, "Path required", http.StatusBadRequest)
+		return
+	}
+
+	// Очищаем путь от попыток выйти из папки (защита от ../..)
+	cleanPath := filepath.Clean(filePath)
+
+	// Проверяем, что файл находится внутри папки data
+	if !strings.HasPrefix(cleanPath, "data") {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Проверяем, не пытаются ли украсть ключи
+	if strings.Contains(cleanPath, "keystore.json") {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Добавляем заголовки для текстовых файлов (нужно для JavaScript fetch)
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Disposition", "inline")
+
+	http.ServeFile(w, r, cleanPath)
 }

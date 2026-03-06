@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -29,7 +30,8 @@ func sendDataSafe(conn net.Conn, data []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	// ИСПРАВЛЕНИЕ: 15 секунд вместо 5
+	conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
 	defer conn.SetWriteDeadline(time.Time{})
 
 	if err := binary.Write(conn, binary.BigEndian, int32(len(data))); err != nil {
@@ -106,7 +108,14 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 			state.UpdatePeer(h.PeerID, conn.RemoteAddr().(*net.TCPAddr).IP.String())
 			state.SetPeerName(h.PeerID, h.Name)
 			state.SetPeerPubKey(h.PeerID, h.PublicKey)
-			state.SaveConnection(h.PeerID, conn)
+
+			// Пытаемся сохранить соединение
+			if !state.SaveConnection(h.PeerID, conn) {
+				// Если SaveConnection вернул false, значит у нас уже есть активная связь с этим пиром.
+				// Закрываем это (входящее) соединение, чтобы не плодить дубли.
+				log.Printf("[TRANSPORT] Duplicate connection from %s rejected. Already connected.", h.PeerID)
+				return
+			}
 
 			if h.EphemeralPub != "" {
 				peerPub, _ := hex.DecodeString(h.EphemeralPub)
@@ -142,6 +151,7 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 			}
 
 			go ResendPendingMessages(state, h.PeerID, uiEvents)
+			go ProcessOutboxForPeer(state, uiEvents, h.PeerID)
 
 			go func() {
 				myHeads := storage.GetHeads(h.PeerID)
@@ -163,7 +173,11 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 			state.UpdatePeer(h.PeerID, conn.RemoteAddr().(*net.TCPAddr).IP.String())
 			state.SetPeerName(h.PeerID, h.Name)
 			state.SetPeerPubKey(h.PeerID, h.PublicKey)
-			state.SaveConnection(h.PeerID, conn)
+
+			if !state.SaveConnection(h.PeerID, conn) {
+				log.Printf("[TRANSPORT] Duplicate connection ACK from %s rejected. Already connected.", h.PeerID)
+				return
+			}
 
 			if h.EphemeralPub != "" {
 				peerPub, _ := hex.DecodeString(h.EphemeralPub)
@@ -178,6 +192,8 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 			}
 
 			log.Printf("[SECURITY] SECURE E2EE Handshake ACK Received: %s. Ready.", h.PeerID)
+
+			go ProcessOutboxForPeer(state, uiEvents, h.PeerID)
 
 		case "ack":
 			var msgID string
@@ -234,6 +250,74 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 			json.Unmarshal(packet.Payload, &resp)
 			for _, c := range resp.Messages {
 				processIncomingChat(c, conn, state, uiEvents, remotePeerID)
+			}
+
+		case "file_start":
+			var fs FileStartPayload
+			json.Unmarshal(packet.Payload, &fs)
+
+			state.Mu.RLock()
+			myID := state.Identity.PeerID
+			state.Mu.RUnlock()
+
+			if fs.TargetID != myID {
+				continue
+			}
+
+			err := InitIncomingFile(fs.TransferID, fs.FileName, fs.FileSize, myID)
+			if err != nil {
+				log.Printf("[FILE] Ошибка инициализации файла: %v", err)
+			}
+
+		case "file_chunk":
+			var fc FileChunkPayload
+			if err := json.Unmarshal(packet.Payload, &fc); err != nil {
+				log.Printf("[FILE] Ошибка парсинга чанка: %v", err)
+				continue
+			}
+
+			senderPubKey := state.GetPeerPubKey(remotePeerID)
+			if senderPubKey != "" && !crypto.VerifySignature(senderPubKey, fc.TransferID, fc.Signature) {
+				log.Printf("[SECURITY] Подпись чанка файла недействительна!")
+				continue
+			}
+
+			var chunkData []byte
+			sessionKey := state.GetSessionKey(remotePeerID)
+
+			if sessionKey != nil && len(fc.Nonce) > 0 {
+				plaintext, err := crypto.DecryptAES(sessionKey, fc.Nonce, fc.Data)
+				if err != nil {
+					log.Printf("[SECURITY] E2EE ошибка расшифровки чанка. Сохраняем как есть. Ошибка: %v", err)
+					chunkData = fc.Data // Фолбэк, чтобы файл не оборвался
+				} else {
+					chunkData = plaintext
+				}
+			} else {
+				chunkData = fc.Data
+			}
+
+			done, savedPath := WriteChunk(fc.TransferID, chunkData, fc.TotalChunks)
+			if done {
+				msgID := CalculateHash(fc.TransferID, []string{})
+				now := time.Now().UnixMilli()
+				fileMsg := "[ФАЙЛ ПОЛУЧЕН] " + savedPath
+
+				entity := storage.MessageEntity{
+					ID: msgID, Parents: []string{}, Sender: remotePeerID, Text: fileMsg,
+					Timestamp: now, Delivered: true,
+				}
+				storage.SaveMessage(remotePeerID, entity)
+				state.SetLastMsgID(remotePeerID, msgID)
+
+				if uiEvents != nil {
+					uiEvents <- models.WSEvent{
+						Type: "new_message",
+						Payload: map[string]interface{}{
+							"id": msgID, "sender": remotePeerID, "text": fileMsg, "timestamp": now,
+						},
+					}
+				}
 			}
 		}
 	}
@@ -382,11 +466,25 @@ func SendPacket(state *core.NodeState, uiEvents chan models.WSEvent, targetPeerI
 		}
 
 		if targetPeerID != "" {
-			state.SaveConnection(targetPeerID, newConn)
+			ok := state.SaveConnection(targetPeerID, newConn)
+			if !ok {
+				// Соединение уже существует, закрываем это новое
+				log.Printf("[TRANSPORT] Connection to %s already exists, rejecting new dial.", targetPeerID)
+				newConn.Close()
+				// Используем старое соединение
+				if oldConn := state.GetConnection(targetPeerID); oldConn != nil {
+					conn = oldConn
+				} else {
+					return fmt.Errorf("connection to %s already exists but became unavailable", targetPeerID)
+				}
+			} else {
+				go handleConnection(newConn, state, uiEvents)
+				conn = newConn
+			}
+		} else {
+			go handleConnection(newConn, state, uiEvents)
+			conn = newConn
 		}
-
-		go handleConnection(newConn, state, uiEvents)
-		conn = newConn
 
 		// Умное ожидание установки ключа: ждем ACK от другой стороны до 2 секунд
 		for i := 0; i < 20; i++ {

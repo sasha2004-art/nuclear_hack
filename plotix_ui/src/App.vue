@@ -148,19 +148,27 @@ const confirmRename = async () => {
                         <button
                             v-if="acc.peer_id === store.activeAccountId"
                             @click.stop="store.setGhost(acc.peer_id, !acc.ghost)"
-                            :class="['text-xs px-1.5 py-0.5 rounded transition', acc.ghost ? 'bg-gray-600 text-gray-300' : 'bg-transparent text-gray-500 hover:text-gray-300']"
+                            :class="['text-xs p-1.5 rounded transition', acc.ghost ? 'bg-gray-600 text-gray-300' : 'bg-transparent text-gray-500 hover:text-gray-300']"
                             :title="acc.ghost ? 'Ghost ON' : 'Ghost OFF'"
                         >
-                            {{ acc.ghost ? '&#128123;' : '&#128065;' }}
+                            <svg v-if="acc.ghost" class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm0-14c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6z" />
+                            </svg>
+                            <svg v-else class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
                         </button>
                         
                         <button
                             v-if="renamingId !== acc.peer_id"
                             @click.stop="startRename(acc)"
-                            class="text-gray-500 hover:text-gray-300 text-xs"
+                            class="text-gray-500 hover:text-gray-300 p-1"
                             title="Rename"
                         >
-                            &#9998;
+                            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                            </svg>
                         </button>
                     </div>
                 </div>

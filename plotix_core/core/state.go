@@ -135,13 +135,23 @@ func (s *NodeState) SetPeerAlias(peerID, name string) {
 	}
 }
 
-func (s *NodeState) SaveConnection(peerID string, conn net.Conn) {
+func (s *NodeState) SaveConnection(peerID string, conn net.Conn) bool {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
-	if oldConn, ok := s.ActiveConns[peerID]; ok {
-		oldConn.Close()
+
+	oldConn, exists := s.ActiveConns[peerID]
+	if exists && oldConn != nil {
+		// Если это то же самое соединение — ничего не делаем
+		if oldConn == conn {
+			return true
+		}
+		// Если у нас уже есть активное соединение с этим пиром,
+		// отклоняем новое. Пусть handleConnection его закроет.
+		return false
 	}
+
 	s.ActiveConns[peerID] = conn
+	return true
 }
 
 func (s *NodeState) GetConnection(peerID string) net.Conn {

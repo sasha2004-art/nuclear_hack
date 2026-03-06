@@ -47,3 +47,22 @@ func CalculateHash(content string, parents []string) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// --- Дополнения для Этапа 11 (File Transfer) ---
+
+type FileStartPayload struct {
+	TransferID string `json:"transfer_id"`
+	FileName   string `json:"file_name"`
+	FileSize   int64  `json:"file_size"`
+	SenderID   string `json:"sender_id"`
+	TargetID   string `json:"target_id"`
+}
+
+type FileChunkPayload struct {
+	TransferID string `json:"transfer_id"`
+	ChunkIndex int    `json:"chunk_index"`
+	TotalChunks int   `json:"total_chunks"`
+	Data       []byte `json:"data"`      // Зашифрованные байты (Go сам сделает Base64)
+	Nonce      []byte `json:"nonce"`     // Nonce в байтах
+	Signature  string `json:"signature"` // Подпись чанка
+}

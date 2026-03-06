@@ -113,6 +113,26 @@ export const useChatStore = defineStore('chat', {
             }
         },
 
+        async sendFile(peerId, file) {
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                await axios.post(`${API_URL}/send_file?peer_id=${peerId}`, formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+
+                // Файл добавлен в очередь, добавим локальное сообщение
+                const fileMsg = `[ФАЙЛ В ОЧЕРЕДИ] ${file.name}`;
+                this.pushMessage(peerId, fileMsg, true);
+
+                return true;
+            } catch (e) {
+                console.error('Failed to send file', e);
+                return false;
+            }
+        },
+
         pushMessage(peerId, payload, isSelf) {
             if (!this.messages[peerId]) {
                 this.messages[peerId] = [];

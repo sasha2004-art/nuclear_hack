@@ -34,6 +34,7 @@ func InitDB(path string) {
 		_, _ = tx.CreateBucketIfNotExists([]byte("messages"))
 		_, _ = tx.CreateBucketIfNotExists([]byte("contacts"))
 		_, _ = tx.CreateBucketIfNotExists([]byte("heads"))
+		_, _ = tx.CreateBucketIfNotExists([]byte("outbox"))
 		return nil
 	})
 
@@ -223,4 +224,45 @@ func CloseDB() {
 	if db != nil {
 		db.Close()
 	}
+}
+
+// --- Дополнения для оффлайн-передачи файлов ---
+
+type OutboxFile struct {
+	TransferID string `json:"transfer_id"`
+	TargetID   string `json:"target_id"`
+	FilePath   string `json:"file_path"`
+	FileName   string `json:"file_name"`
+	FileSize   int64  `json:"file_size"`
+}
+
+func SaveOutboxFile(f OutboxFile) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte("outbox"))
+		data, _ := json.Marshal(f)
+		return b.Put([]byte(f.TransferID), data)
+	})
+}
+
+func GetOutboxFiles(peerID string) []OutboxFile {
+	var files []OutboxFile
+	db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte("outbox"))
+		b.ForEach(func(k, v []byte) error {
+			var f OutboxFile
+			json.Unmarshal(v, &f)
+			if f.TargetID == peerID {
+				files = append(files, f)
+			}
+			return nil
+		})
+		return nil
+	})
+	return files
+}
+
+func RemoveOutboxFile(transferID string) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket([]byte("outbox")).Delete([]byte(transferID))
+	})
 }

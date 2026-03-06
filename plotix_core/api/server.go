@@ -57,6 +57,7 @@ func (s *Server) Start(port string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/peers", s.handleGetPeers)
 	mux.HandleFunc("/send_message", s.handleSendMessage)
+	mux.HandleFunc("/send_file", s.handleSendFile)
 	mux.HandleFunc("/events", s.handleWSEvents)
 	mux.HandleFunc("/add_peer", s.handleAddPeerManual)
 	mux.HandleFunc("/history", s.handleGetHistory)
@@ -67,6 +68,7 @@ func (s *Server) Start(port string) {
 	mux.HandleFunc("/accounts/rename", s.handleRenameAccount)
 	mux.HandleFunc("/accounts/ghost", s.handleSetGhost)
 	mux.HandleFunc("/peer/rename", s.handleRenamePeer)
+	mux.HandleFunc("/view", s.handleFileView)
 
 	if s.uiFS != nil {
 		fileServer := http.FileServer(http.FS(s.uiFS))
