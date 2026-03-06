@@ -1,14 +1,17 @@
 package com.example.plotix_mobile.presentation.main
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
+import cafe.adriel.voyager.core.model.ScreenModel
+import cafe.adriel.voyager.core.model.screenModelScope // Важный импорт
 import com.example.plotix_mobile.domain.model.ChatContact
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-class MainViewModel : ViewModel() {
+// 1. Убираем ViewModel, оставляем только ScreenModel
+class MainScreenModel : ScreenModel {
+
+    // 2. Убираем ключевые слова 'override' — эти поля не определены в интерфейсе ScreenModel
     private val _state = MutableStateFlow(MainScreenState())
     val state = _state.asStateFlow()
 
@@ -17,10 +20,11 @@ class MainViewModel : ViewModel() {
     }
 
     private fun loadChats() {
-        viewModelScope.launch {
+        // 3. Используем screenModelScope вместо viewModelScope
+        screenModelScope.launch {
             _state.update { it.copy(isLoading = true) }
 
-            // Имитация загрузки данных (в будущем здесь будет Repository)
+            // Имитация загрузки данных
             val mockData = listOf(
                 ChatContact("1", "hex_6e994a1ab44b..."),
                 ChatContact("2", "Мессенджер секкс"),
@@ -29,7 +33,13 @@ class MainViewModel : ViewModel() {
                 ChatContact("5", "hex_d2212e56a93a52fb", isOnline = true)
             )
 
-            _state.update { it.copy(chats = mockData, isLoading = false, selectedChatId = "5") }
+            _state.update {
+                it.copy(
+                    chats = mockData,
+                    isLoading = false,
+                    selectedChatId = "5"
+                )
+            }
         }
     }
 
