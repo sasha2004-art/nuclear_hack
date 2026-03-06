@@ -1,0 +1,31 @@
+name: iOS_Build
+
+on:
+  push:
+    branches: [ "main" ]
+    # Совет: запускать сборку только если изменились файлы в папке mobile-app
+    paths:
+      - 'mobile-app/**'
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'zulu'
+
+      - name: Grant execute permission for gradlew
+        # Указываем путь к файлу gradlew относительно корня
+        run: chmod +x ./plotix_mobile/gradlew
+
+      - name: Build iOS App
+        # Указываем, в какой папке выполнять команду
+        working-directory: ./plotix_mobile
+        run: ./gradlew :composeApp:assembleRelease
