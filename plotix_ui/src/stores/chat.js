@@ -153,7 +153,14 @@ export const useChatStore = defineStore('chat', {
                 self: isSelf,
                 timestamp
             });
-            this.messages[peerId].sort((a, b) => a.timestamp - b.timestamp);
+
+            // Сортировка по ID (hash) для детерминизма, вторичная - по timestamp
+            this.messages[peerId].sort((a, b) => {
+                if (a.id < b.id) return -1;
+                if (a.id > b.id) return 1;
+                return a.timestamp - b.timestamp;
+            });
+
             this.messages = { ...this.messages };
         },
 
@@ -161,7 +168,13 @@ export const useChatStore = defineStore('chat', {
             try {
                 const res = await axios.get(`${API_URL}/history?peer_id=${peerId}`);
                 if (res.data && res.data.length > 0) {
-                    res.data.sort((a, b) => a.timestamp - b.timestamp);
+                    // Сортировка по ID (hash) для детерминизма, вторичная - по timestamp
+                    res.data.sort((a, b) => {
+                        if (a.id < b.id) return -1;
+                        if (a.id > b.id) return 1;
+                        return a.timestamp - b.timestamp;
+                    });
+
                     this.messages[peerId] = res.data.map(m => ({
                         id: m.id,
                         text: m.text,

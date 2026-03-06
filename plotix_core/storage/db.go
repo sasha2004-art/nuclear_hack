@@ -96,7 +96,12 @@ func GetHistory(peerID string) ([]MessageEntity, error) {
 		})
 	})
 
+	// Сортировка по ID (лексикографически) для детерминизма в DAG
+	// Вторичная сортировка по Timestamp для надежности
 	sort.Slice(history, func(i, j int) bool {
+		if history[i].ID != history[j].ID {
+			return history[i].ID < history[j].ID
+		}
 		return history[i].Timestamp < history[j].Timestamp
 	})
 
