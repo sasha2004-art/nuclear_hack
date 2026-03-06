@@ -2,10 +2,10 @@ name: iOS_Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "mobile" ]
     # Совет: запускать сборку только если изменились файлы в папке mobile-app
     paths:
-      - 'mobile-app/**'
+      - 'plotix_mobile/**'
 
 jobs:
   build:
