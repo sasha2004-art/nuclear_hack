@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"plotix_core/models"
+	"plotix_core/storage"
 	"plotix_core/transport"
 )
 
@@ -44,11 +46,27 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chat := transport.ChatPayload{Content: req.Message}
+	parents := s.state.GetLastMsgID(req.PeerID)
+	msgID := transport.CalculateHash(req.Message, parents)
+	chat := transport.ChatPayload{
+		ID:      msgID,
+		Parents: parents,
+		Content: req.Message,
+	}
 	if err := transport.SendPacket(s.state, s.Broadcast, req.PeerID, ip, "chat", chat); err != nil {
 		http.Error(w, "Failed to send: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	entity := storage.MessageEntity{
+		ID:        msgID,
+		Parents:   parents,
+		Sender:    s.state.Identity.PeerID,
+		Text:      req.Message,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	storage.SaveMessage(req.PeerID, entity)
+	s.state.SetLastMsgID(req.PeerID, msgID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
@@ -71,6 +89,27 @@ func (s *Server) handleAddPeerManual(w http.ResponseWriter, r *http.Request) {
 	s.state.UpdatePeer("manual_entry_"+req.IP, req.IP)
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "peer_added_locally"})
+}
+
+func (s *Server) handleGetHistory(w http.ResponseWriter, r *http.Request) {
+	peerID := r.URL.Query().Get("peer_id")
+	if peerID == "" {
+		http.Error(w, "peer_id required", http.StatusBadRequest)
+		return
+	}
+
+	history, err := storage.GetHistory(peerID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if history == nil {
+		history = []storage.MessageEntity{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
 }
 
 func (s *Server) handleWSEvents(w http.ResponseWriter, r *http.Request) {

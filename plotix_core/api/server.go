@@ -55,6 +55,7 @@ func (s *Server) Start(port string) {
 	mux.HandleFunc("/send_message", s.handleSendMessage)
 	mux.HandleFunc("/events", s.handleWSEvents)
 	mux.HandleFunc("/add_peer", s.handleAddPeerManual)
+	mux.HandleFunc("/history", s.handleGetHistory)
 
 	if s.uiFS != nil {
 		fileServer := http.FileServer(http.FS(s.uiFS))

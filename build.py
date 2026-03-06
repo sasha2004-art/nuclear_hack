@@ -3,9 +3,9 @@ import os
 import sys
 import shutil
 
-def run_command(command, cwd, description):
+def run_command(command, cwd, description, env=None):
     print(f"[*] {description}...")
-    result = subprocess.run(command, cwd=cwd, shell=True)
+    result = subprocess.run(command, cwd=cwd, shell=True, env=env)
     if result.returncode != 0:
         print(f"[!] Error: {description} failed.")
         sys.exit(1)
@@ -16,7 +16,7 @@ def build():
     core_dir = os.path.join(base_dir, "plotix_core")
     dist_target = os.path.join(core_dir, "ui_dist")
 
-    print("--- Building Frontend ---")
+    print("=== STEP 1: Building Frontend ===")
     run_command("npm install", ui_dir, "npm install")
     run_command("npm run build", ui_dir, "npm run build")
 
@@ -31,14 +31,28 @@ def build():
     shutil.copytree(source_dist, dist_target)
     print("[+] Frontend copied to plotix_core/ui_dist")
 
-    print("\n--- Building Go Binary ---")
-    binary_name = "plotix_app.exe"
-    build_cmd = f"go build -ldflags=\"-s -w\" -o ../{binary_name} ."
-    run_command(build_cmd, core_dir, "go build")
+    print("\n=== STEP 2: Compiling Resource File (Manifest) ===")
+    run_command("rsrc -manifest app.manifest -o rsrc.syso", core_dir, "rsrc manifest embed")
 
-    final_path = os.path.join(base_dir, binary_name)
+    print("\n=== STEP 3: Compiling Go Binary (Admin Rights) ===")
+    env = os.environ.copy()
+    env["GOOS"] = "windows"
+    env["GOARCH"] = "amd64"
+
+    build_dir = os.path.join(base_dir, "build")
+    os.makedirs(build_dir, exist_ok=True)
+
+    binary_name = "plotix_portable.exe"
+    build_cmd = f'go build -ldflags="-s -w" -o ../build/{binary_name} .'
+    run_command(build_cmd, core_dir, "go build", env=env)
+
+    syso_path = os.path.join(core_dir, "rsrc.syso")
+    if os.path.exists(syso_path):
+        os.remove(syso_path)
+
+    final_path = os.path.join(build_dir, binary_name)
     size_mb = os.path.getsize(final_path) / (1024 * 1024)
-    print(f"\n[DONE] Built: {binary_name} ({size_mb:.1f} MB)")
+    print(f"\n[DONE] Built: build/{binary_name} ({size_mb:.1f} MB)")
     print("[INFO] Run it and open http://localhost:8080 in browser.")
 
 if __name__ == "__main__":

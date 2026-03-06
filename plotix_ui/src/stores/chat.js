@@ -49,6 +49,23 @@ export const useChatStore = defineStore('chat', {
             this.messages = { ...this.messages };
         },
 
+        
+        async fetchHistory(peerId) {
+            try {
+                const res = await axios.get(`${API_URL}/history?peer_id=${peerId}`);
+                if (res.data && res.data.length > 0) {
+                    this.messages[peerId] = res.data.map(m => ({
+                        text: m.text,
+                        self: m.sender === this.myId,
+                        timestamp: m.timestamp
+                    }));
+                    this.messages = { ...this.messages };
+                }
+            } catch (e) {
+                console.error('Failed to fetch history');
+            }
+        },
+
         initWebSocket() {
             const socket = new WebSocket(WS_URL);
 

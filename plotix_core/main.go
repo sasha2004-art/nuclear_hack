@@ -18,13 +18,17 @@ import (
 	"plotix_core/core"
 	"plotix_core/crypto"
 	"plotix_core/discovery"
+	"plotix_core/storage"
 	"plotix_core/transport"
 	"plotix_core/utils"
 )
 
+//go:embed all:ui_dist
 var uiStatic embed.FS
 
 func main() {
+	utils.SetupFirewallRules()
+
 	ifaceFlag := flag.String("iface", "", "Network interface name")
 	flag.Parse()
 
@@ -65,6 +69,8 @@ func main() {
 	}
 
 	log.Printf("[BOOT] PeerID: %s", ident.PeerID)
+
+	storage.InitDB(".")
 
 	state := core.NewNodeState(ident)
 

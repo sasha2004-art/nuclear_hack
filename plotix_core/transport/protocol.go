@@ -1,6 +1,10 @@
 package transport
 
-import "encoding/json"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+)
 
 type Packet struct {
 	Type    string          `json:"type"`
@@ -13,5 +17,17 @@ type HandshakePayload struct {
 }
 
 type ChatPayload struct {
-	Content string `json:"content"`
+	ID      string   `json:"id"`
+	Parents []string `json:"parents"`
+	Content string   `json:"content"`
+}
+
+// CalculateHash создает уникальный ID сообщения на основе контента и родителей
+func CalculateHash(content string, parents []string) string {
+	h := sha256.New()
+	h.Write([]byte(content))
+	for _, p := range parents {
+		h.Write([]byte(p))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

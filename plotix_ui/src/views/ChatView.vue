@@ -19,7 +19,12 @@ const scrollToBottom = async () => {
 };
 
 watch(messages, () => scrollToBottom(), { deep: true });
-watch(peerId, () => scrollToBottom());
+watch(peerId, (newId) => {
+    if (newId) {
+        store.fetchHistory(newId);
+    }
+    scrollToBottom();
+}, { immediate: true });
 
 const handleSend = async () => {
     if (!messageText.value.trim()) return;
@@ -56,12 +61,8 @@ const handleSend = async () => {
             </div>
         </div>
 
-        
-/div>
-        </div>
-
-        
-s="max-w-4xl mx-auto flex gap-4">
+        <footer class="p-4 bg-gray-800 border-t border-gray-700">
+            <div class="max-w-4xl mx-auto flex gap-4">
                 <input
                     v-model="messageText"
                     @keyup.enter="handleSend"
@@ -73,9 +74,9 @@ s="max-w-4xl mx-auto flex gap-4">
                     @click="handleSend"
                     class="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-xl font-bold transition shadow-lg active:transform active:scale-95"
                 >
-                    ОТПРАВИТЬ
-                </button>
                     SEND
-ooter>
+                </button>
+            </div>
+        </footer>
     </div>
 </template>

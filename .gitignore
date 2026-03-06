@@ -1,5 +1,7 @@
 # Binary
 *.exe
+*.exe~
+*.db
 
 # Generated
 1.txt

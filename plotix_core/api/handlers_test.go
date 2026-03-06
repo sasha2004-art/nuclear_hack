@@ -18,7 +18,7 @@ func TestHandleGetPeers(t *testing.T) {
 	state.Peers["test_peer_1"] = "192.168.1.10"
 	state.Mu.Unlock()
 
-	server := NewServer(state)
+	server := NewServer(state, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/peers", nil)
 	rr := httptest.NewRecorder()
@@ -40,12 +40,12 @@ func TestHandleGetPeers(t *testing.T) {
 	}
 }
 
-func TestHandleSendMessage_Valid(t *testing.T) {
+func TestHandleSendMessage_PeerNotFound(t *testing.T) {
 	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
-	server := NewServer(state)
+	server := NewServer(state, nil)
 
 	payload := models.SendMessageReq{
-		PeerID:  "target_user",
+		PeerID:  "nonexistent_peer",
 		Message: "Привет, тест!",
 	}
 	body, _ := json.Marshal(payload)
@@ -56,20 +56,14 @@ func TestHandleSendMessage_Valid(t *testing.T) {
 
 	server.handleSendMessage(rr, req)
 
-	if status := rr.Code; status != http.StatusOK {
-		t.Errorf("Ожидался статус %v, получен %v", http.StatusOK, status)
-	}
-
-	var response map[string]string
-	json.NewDecoder(rr.Body).Decode(&response)
-	if response["status"] != "ok" {
-		t.Errorf("Ожидался статус 'ok', получено: %v", response["status"])
+	if status := rr.Code; status != http.StatusNotFound {
+		t.Errorf("Ожидался статус %v, получен %v", http.StatusNotFound, status)
 	}
 }
 
 func TestHandleSendMessage_InvalidMethod(t *testing.T) {
 	state := core.NewNodeState(&crypto.Identity{PeerID: "test"})
-	server := NewServer(state)
+	server := NewServer(state, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/send_message", nil)
 	rr := httptest.NewRecorder()

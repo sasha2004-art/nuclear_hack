@@ -16,6 +16,7 @@ type NodeState struct {
 	Peers       map[string]string
 	ActiveConns map[string]net.Conn
 	NewPeerChan chan string
+	LastMsgIDs  map[string]string
 }
 
 func NewNodeState(ident *crypto.Identity) *NodeState {
@@ -24,7 +25,24 @@ func NewNodeState(ident *crypto.Identity) *NodeState {
 		Peers:       make(map[string]string),
 		ActiveConns: make(map[string]net.Conn),
 		NewPeerChan: make(chan string, 10),
+		LastMsgIDs:  make(map[string]string),
 	}
+}
+
+func (s *NodeState) GetLastMsgID(peerID string) []string {
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+	lastID, ok := s.LastMsgIDs[peerID]
+	if !ok {
+		return []string{}
+	}
+	return []string{lastID}
+}
+
+func (s *NodeState) SetLastMsgID(peerID, msgID string) {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	s.LastMsgIDs[peerID] = msgID
 }
 
 func (s *NodeState) UpdatePeer(peerID, ip string) {

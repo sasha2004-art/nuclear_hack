@@ -6,9 +6,11 @@ import (
 	"io"
 	"log"
 	"net"
+	"time"
 
 	"plotix_core/core"
 	"plotix_core/models"
+	"plotix_core/storage"
 )
 
 const tcpPort = "10000"
@@ -91,13 +93,25 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 
 			log.Printf("[CHAT] From %s: %s", senderID, c.Content)
 
-			if senderID != "" && uiEvents != nil {
-				uiEvents <- models.WSEvent{
-					Type: "new_message",
-					Payload: map[string]string{
-						"sender": senderID,
-						"text":   c.Content,
-					},
+			if senderID != "" {
+				entity := storage.MessageEntity{
+					ID:        c.ID,
+					Parents:   c.Parents,
+					Sender:    senderID,
+					Text:      c.Content,
+					Timestamp: time.Now().UnixMilli(),
+				}
+				storage.SaveMessage(senderID, entity)
+				state.SetLastMsgID(senderID, c.ID)
+
+				if uiEvents != nil {
+					uiEvents <- models.WSEvent{
+						Type: "new_message",
+						Payload: map[string]string{
+							"sender": senderID,
+							"text":   c.Content,
+						},
+					}
 				}
 			}
 		}
