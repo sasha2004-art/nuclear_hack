@@ -63,5 +63,5 @@ jobs:
         with:
           name: Plotix_iOS_Installation_File
           # Путь к нашему архиву
-          path: plotix_mobile/iosApp/Plotix_iOS.zip
+          path: plotix_mobile/iosApp/Plotix_iOS.ipa
           retention-days: 5
