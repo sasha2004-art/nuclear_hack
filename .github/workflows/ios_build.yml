@@ -19,6 +19,15 @@ jobs:
         with:
           java-version: '17'
           distribution: 'zulu'
+          cache: 'gradle'
+
+      - name: Cache Kotlin Native
+        # Кэшируем компилятор Kotlin/Native и его части
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
+          restore-keys: ${{ runner.os }}-konan-
 
       - name: Grant execute permission for gradlew
         run: chmod +x ./plotix_mobile/gradlew
