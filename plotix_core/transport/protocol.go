@@ -66,3 +66,12 @@ type FileChunkPayload struct {
 	Nonce      []byte `json:"nonce"`     // Nonce в байтах
 	Signature  string `json:"signature"` // Подпись чанка
 }
+
+// --- Дополнения для Этапа 12 (WebRTC Signaling) ---
+
+type WebRTCSignalPayload struct {
+	SenderID string `json:"sender_id"`
+	TargetID string `json:"target_id"`
+	Type     string `json:"type"` // "offer", "answer", "candidate"
+	Data     string `json:"data"` // JSON-строка от WebRTC API браузера
+}

@@ -133,6 +133,18 @@ export const useChatStore = defineStore('chat', {
             }
         },
 
+        async sendWebRTCSignal(targetId, type, data) {
+            try {
+                await axios.post(`${API_URL}/webrtc/signal`, {
+                    target_id: targetId,
+                    type: type,
+                    data: JSON.stringify(data)
+                });
+            } catch (e) {
+                console.error('Failed to send WebRTC signal', e);
+            }
+        },
+
         pushMessage(peerId, payload, isSelf) {
             if (!this.messages[peerId]) {
                 this.messages[peerId] = [];
@@ -212,6 +224,10 @@ export const useChatStore = defineStore('chat', {
                     this.fetchMe();
                     this.fetchAccounts();
                     this.fetchPeers();
+                }
+                if (data.type === 'webrtc_signal') {
+                    // Создаем кастомное событие, которое будет слушать ChatView.vue
+                    window.dispatchEvent(new CustomEvent('webrtc-signal', { detail: data.payload }));
                 }
             };
 

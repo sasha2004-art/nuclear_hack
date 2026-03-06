@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, watch } from 'vue';
+import { ref, computed, nextTick, watch, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useChatStore } from '../stores/chat';
 
@@ -25,6 +25,21 @@ const API_URL = 'http://localhost:8080';
 
 // Кэш для содержимого текстовых файлов
 const textPreviews = ref({});
+
+// WebRTC переменные
+const localVideo = ref(null);
+const remoteVideo = ref(null);
+const isCalling = ref(false);
+const isIncomingCall = ref(false);
+const callType = ref('video'); // 'video' или 'audio'
+const incomingSignal = ref(null); // Сохраненный оффер для принятия
+const remoteStreamActive = ref(false); // Флаг активного видеопотока
+const peerConnection = ref(null);
+
+// Конфигурация WebRTC (используем только публичные Google STUN для определения внешних IP)
+const rtcConfig = {
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+};
 
 // Получить расширение файла
 const getFileExt = (path) => path.split('.').pop().toLowerCase();
@@ -141,6 +156,118 @@ const onDrop = (e) => {
         uploadFile(e.dataTransfer.files[0]);
     }
 };
+
+// --- WebRTC логика ---
+const setupWebRTC = async (type = 'video') => {
+    callType.value = type;
+    peerConnection.value = new RTCPeerConnection(rtcConfig);
+
+    // Обработка найденных ICE-кандидатов
+    peerConnection.value.onicecandidate = (event) => {
+        if (event.candidate) {
+            store.sendWebRTCSignal(peerId.value, 'candidate', event.candidate);
+        }
+    };
+
+    // При получении удаленного потока
+    peerConnection.value.ontrack = (event) => {
+        if (remoteVideo.value) {
+            remoteVideo.value.srcObject = event.streams[0];
+        }
+    };
+
+    // Настройка ограничений (видео или только аудио)
+    const constraints = {
+        video: type === 'video' ? { width: 1280, height: 720 } : false,
+        audio: true
+    };
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (localVideo.value) localVideo.value.srcObject = stream;
+        stream.getTracks().forEach(track => peerConnection.value.addTrack(track, stream));
+    } catch (e) {
+        console.error("Камера/микрофон недоступны", e);
+    }
+};
+
+const startCall = async (type = 'video') => {
+    // ЗАЩИТА: Если уже звоним или принимаем — выходим
+    if (isCalling.value || isIncomingCall.value) return;
+
+    isCalling.value = true;
+    await setupWebRTC(type);
+    const offer = await peerConnection.value.createOffer();
+    await peerConnection.value.setLocalDescription(offer);
+    store.sendWebRTCSignal(peerId.value, 'offer', { sdp: offer, callType: type });
+};
+
+const acceptCall = async () => {
+    const data = JSON.parse(incomingSignal.value.data);
+    isIncomingCall.value = false;
+    isCalling.value = true;
+
+    await setupWebRTC(data.callType || 'video');
+    await peerConnection.value.setRemoteDescription(new RTCSessionDescription(data.sdp));
+
+    const answer = await peerConnection.value.createAnswer();
+    await peerConnection.value.setLocalDescription(answer);
+    store.sendWebRTCSignal(peerId.value, 'answer', answer);
+};
+
+const rejectCall = () => {
+    store.sendWebRTCSignal(peerId.value, 'reject', {});
+    isIncomingCall.value = false;
+    incomingSignal.value = null;
+};
+
+const cleanupCall = () => {
+    if (peerConnection.value) {
+        peerConnection.value.close();
+        peerConnection.value = null;
+    }
+    if (localVideo.value?.srcObject) {
+        localVideo.value.srcObject.getTracks().forEach(t => t.stop());
+    }
+    isCalling.value = false;
+    isIncomingCall.value = false;
+    remoteStreamActive.value = false;
+};
+
+const handleVideoPlaying = () => {
+    if (callType.value === 'video') {
+        remoteStreamActive.value = true;
+    }
+};
+
+const endCall = () => {
+    store.sendWebRTCSignal(peerId.value, 'hangup', {});
+    cleanupCall();
+};
+
+// Слушатель сигналов от ядра
+const handleSignal = async (e) => {
+    const signal = e.detail;
+    if (signal.sender_id !== peerId.value) return;
+
+    if (signal.type === 'offer') {
+        incomingSignal.value = signal;
+        const data = JSON.parse(signal.data);
+        callType.value = data.callType || 'video';
+        isIncomingCall.value = true;
+    } else if (signal.type === 'answer') {
+        const data = JSON.parse(signal.data);
+        await peerConnection.value.setRemoteDescription(new RTCSessionDescription(data));
+    } else if (signal.type === 'candidate') {
+        const data = JSON.parse(signal.data);
+        await peerConnection.value.addIceCandidate(new RTCIceCandidate(data));
+    } else if (signal.type === 'reject' || signal.type === 'hangup') {
+        cleanupCall();
+    }
+};
+
+window.addEventListener('webrtc-signal', handleSignal);
+onUnmounted(() => window.removeEventListener('webrtc-signal', handleSignal));
 </script>
 
 <template>
@@ -196,6 +323,34 @@ const onDrop = (e) => {
                     ID: {{ peerId.slice(0, 12) }}...
                 </p>
                 <p class="text-[10px] text-gray-600">DIRECT TCP + OFFLINE QUEUE</p>
+            </div>
+
+            <!-- WebRTC звонки кнопки (скрываются, если вызов уже в процессе) -->
+            <div v-if="!isCalling && !isIncomingCall" class="flex gap-2 animate-in fade-in zoom-in duration-300">
+                <button
+                    @click="startCall('audio')"
+                    class="p-3 bg-gray-700 hover:bg-indigo-600 rounded-full text-white transition shadow-lg active:scale-90"
+                    title="Голосовой звонок"
+                >
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                    </svg>
+                </button>
+                <button
+                    @click="startCall('video')"
+                    class="p-3 bg-gray-700 hover:bg-emerald-600 rounded-full text-white transition shadow-lg active:scale-90"
+                    title="Видеозвонок"
+                >
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Индикатор того, что линия занята -->
+            <div v-else class="px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-full flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>
+                <span class="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Линия занята</span>
             </div>
         </header>
 
@@ -326,5 +481,106 @@ const onDrop = (e) => {
                 </button>
             </div>
         </footer>
+
+        <!-- UI: ВХОДЯЩИЙ ЗВОНОК (Glassmorphism Modal) -->
+        <transition name="fade">
+            <div v-if="isIncomingCall" class="absolute inset-0 z-[60] flex items-center justify-center bg-gray-950/80 backdrop-blur-md">
+                <div class="bg-gray-800 p-8 rounded-[40px] border border-white/10 shadow-2xl flex flex-col items-center text-center max-w-sm w-full mx-4">
+                    <div class="relative mb-6">
+                        <div class="absolute inset-0 rounded-full bg-indigo-500 animate-ping opacity-20"></div>
+                        <div class="w-24 h-24 rounded-full bg-indigo-600 flex items-center justify-center text-3xl font-bold text-white shadow-xl">
+                            {{ peerDisplayName.charAt(0).toUpperCase() }}
+                        </div>
+                    </div>
+                    <h3 class="text-2xl font-bold text-white mb-1">{{ peerDisplayName }}</h3>
+                    <p class="text-gray-400 mb-8">{{ callType === 'video' ? 'Видеозвонок...' : 'Аудиозвонок...' }}</p>
+
+                    <div class="flex gap-6 w-full">
+                        <button @click="rejectCall" class="flex-1 py-4 bg-rose-500 hover:bg-rose-600 rounded-2xl text-white font-bold transition-all active:scale-95 shadow-lg shadow-rose-500/20">
+                            Сбросить
+                        </button>
+                        <button @click="acceptCall" class="flex-1 py-4 bg-emerald-500 hover:bg-emerald-600 rounded-2xl text-white font-bold transition-all active:scale-95 shadow-lg shadow-emerald-500/20">
+                            Принять
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- UI: АКТИВНЫЙ ЗВОНОК (Аудио или Видео) -->
+        <transition name="fade">
+            <div v-if="isCalling" class="absolute inset-0 z-50 bg-gray-950 flex flex-col overflow-hidden">
+                <div class="relative flex-1 bg-black flex items-center justify-center">
+
+                    <!-- Видео собеседника -->
+                    <video
+                        v-show="callType === 'video'"
+                        ref="remoteVideo"
+                        autoplay
+                        playsinline
+                        @playing="handleVideoPlaying"
+                        class="w-full h-full object-cover transition-opacity duration-700"
+                        :class="remoteStreamActive ? 'opacity-100' : 'opacity-0'"
+                    ></video>
+
+                    <!-- Оверлей аватара (Показываем только если Аудио-звонок ИЛИ видео еще не подгрузилось) -->
+                    <div v-if="callType === 'audio' || !remoteStreamActive"
+                         class="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/40 backdrop-blur-sm">
+
+                        <div class="relative">
+                            <!-- Красивая пульсация (только если видео еще нет или это аудио) -->
+                            <div class="absolute inset-0 rounded-full bg-indigo-500/20 animate-ping" style="animation-duration: 3s"></div>
+                            <div class="absolute inset-[-20px] rounded-full border border-indigo-500/10 animate-pulse"></div>
+
+                            <!-- Аватар -->
+                            <div class="w-40 h-40 rounded-full bg-gray-800 border-4 border-gray-700 shadow-2xl flex items-center justify-center relative z-10">
+                                <span class="text-7xl font-bold text-white/90 drop-shadow-lg">
+                                    {{ peerDisplayName.charAt(0).toUpperCase() }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="mt-10 text-center">
+                            <h3 class="text-xl font-bold text-white mb-2">{{ peerDisplayName }}</h3>
+                            <p class="text-xs text-indigo-400 font-medium tracking-[0.2em] uppercase opacity-70">
+                                {{ callType === 'audio' ? 'Голосовая связь' : 'Установка видеосвязи...' }}
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Твоё превью (PIP) -->
+                    <div v-if="callType === 'video'"
+                         class="absolute top-6 right-6 w-44 aspect-video rounded-2xl overflow-hidden border-2 border-white/10 shadow-2xl bg-gray-900 ring-1 ring-black/50">
+                        <video ref="localVideo" autoplay muted playsinline class="w-full h-full object-cover"></video>
+                    </div>
+                </div>
+
+                <!-- Кнопка сброса (Более аккуратная) -->
+                <div class="absolute bottom-12 left-1/2 -translate-x-1/2">
+                    <button @click="endCall"
+                            class="group relative w-16 h-16 flex items-center justify-center bg-red-500 rounded-full shadow-[0_0_30px_rgba(239,68,68,0.4)] transition-all hover:bg-red-600 active:scale-90">
+                        <svg class="w-8 h-8 text-white rotate-[135deg] group-hover:scale-110 transition-transform" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </transition>
     </div>
 </template>
+
+<style scoped>
+.fade-enter-active, .fade-leave-active {
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fade-enter-from, .fade-leave-to {
+    opacity: 0;
+    transform: scale(1.05);
+}
+
+/* Эффект свечения для видео */
+video {
+    mask-image: radial-gradient(white, black);
+}
+</style>

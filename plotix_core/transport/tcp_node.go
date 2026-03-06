@@ -319,6 +319,18 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 					}
 				}
 			}
+
+		case "webrtc_signal":
+			var sig WebRTCSignalPayload
+			json.Unmarshal(packet.Payload, &sig)
+
+			// Просто пробрасываем событие в браузер через WebSocket
+			if uiEvents != nil {
+				uiEvents <- models.WSEvent{
+					Type:    "webrtc_signal",
+					Payload: sig,
+				}
+			}
 		}
 	}
 }

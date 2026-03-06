@@ -69,6 +69,7 @@ func (s *Server) Start(port string) {
 	mux.HandleFunc("/accounts/ghost", s.handleSetGhost)
 	mux.HandleFunc("/peer/rename", s.handleRenamePeer)
 	mux.HandleFunc("/view", s.handleFileView)
+	mux.HandleFunc("/webrtc/signal", s.handleWebRTCSignal)
 
 	if s.uiFS != nil {
 		fileServer := http.FileServer(http.FS(s.uiFS))

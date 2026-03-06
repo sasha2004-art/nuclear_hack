@@ -434,3 +434,39 @@ func (s *Server) handleFileView(w http.ResponseWriter, r *http.Request) {
 
 	http.ServeFile(w, r, cleanPath)
 }
+
+// handleWebRTCSignal отправляет WebRTC данные другому пиру через P2P канал
+func (s *Server) handleWebRTCSignal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req transport.WebRTCSignalPayload
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.state.Mu.RLock()
+	myID := s.state.Identity.PeerID
+	ip, online := s.state.Peers[req.TargetID]
+	s.state.Mu.RUnlock()
+
+	if !online {
+		http.Error(w, "Peer offline", http.StatusNotFound)
+		return
+	}
+
+	req.SenderID = myID
+	// Отправляем пакет типа "webrtc_signal"
+	err := transport.SendPacket(s.state, s.Broadcast, req.TargetID, ip, "webrtc_signal", req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
+}
