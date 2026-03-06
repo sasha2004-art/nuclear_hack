@@ -1,0 +1,7 @@
+TEAM_ID=
+
+PRODUCT_NAME=Plotix_mobile
+PRODUCT_BUNDLE_IDENTIFIER=com.example.plotix_mobile.Plotix_mobile$(TEAM_ID)
+
+CURRENT_PROJECT_VERSION=1
+MARKETING_VERSION=1.0
