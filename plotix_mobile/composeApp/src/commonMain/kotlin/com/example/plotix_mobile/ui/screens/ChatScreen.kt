@@ -16,8 +16,9 @@ import cafe.adriel.voyager.core.model.rememberScreenModel
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
+import com.example.plotix_mobile.domain.getChatRepository
 import com.example.plotix_mobile.domain.model.ChatContact
-import com.example.plotix_mobile.presentation.chat.ChatScreenModel // Переименованный ViewModel
+import com.example.plotix_mobile.presentation.chat.ChatScreenModel
 import com.example.plotix_mobile.ui.theme.Colors
 
 data class ChatScreen(val contact: ChatContact) : Screen {
@@ -26,7 +27,7 @@ data class ChatScreen(val contact: ChatContact) : Screen {
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         // Используем ScreenModel для чата
-        val screenModel = rememberScreenModel { ChatScreenModel(contact) }
+        val screenModel = rememberScreenModel { ChatScreenModel(contact, getChatRepository()) }
         val messages by screenModel.messages.collectAsState()
         val inputText by screenModel.inputText.collectAsState()
 

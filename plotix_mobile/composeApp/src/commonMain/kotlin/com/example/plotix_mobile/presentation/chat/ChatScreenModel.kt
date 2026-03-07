@@ -1,31 +1,62 @@
 package com.example.plotix_mobile.presentation.chat
 
 import cafe.adriel.voyager.core.model.ScreenModel
+import cafe.adriel.voyager.core.model.screenModelScope
+import com.example.plotix_mobile.domain.ChatRepository
 import com.example.plotix_mobile.domain.model.ChatContact
 import com.example.plotix_mobile.domain.model.Message
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlin.time.Clock
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlinx.datetime.Clock
 
-class ChatScreenModel(val contact: ChatContact) : ScreenModel {
+class ChatScreenModel(
+    val contact: ChatContact,
+    private val repository: ChatRepository
+) : ScreenModel {
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages = _messages.asStateFlow()
 
     private val _inputText = MutableStateFlow("")
     val inputText = _inputText.asStateFlow()
 
-    fun onTextChanged(text: String) { _inputText.value = text }
+    init {
+        observeMessages()
+    }
+
+    private fun observeMessages() {
+        screenModelScope.launch {
+            repository.incomingMessages.collectLatest { message ->
+                if (message.senderId == contact.id) {
+                    _messages.value += message
+                }
+            }
+        }
+    }
+
+    fun onTextChanged(text: String) {
+        _inputText.value = text
+    }
 
     fun sendMessage() {
-        if (_inputText.value.isBlank()) return
+        val text = _inputText.value
+        if (text.isBlank()) return
+
+        val now = Clock.System.now().toEpochMilliseconds()
         val newMessage = Message(
-            id = Clock.System.now().toEpochMilliseconds().toString(),
-            text = _inputText.value,
+            id = "me_$now",
+            text = text,
+            senderId = "me", // Тут должен быть ваш ID
             isFromMe = true,
-            timestamp = Clock.System.now().toEpochMilliseconds(),
-            senderId = "52"
+            timestamp = now
         )
+
         _messages.value += newMessage
         _inputText.value = ""
+
+        screenModelScope.launch {
+            repository.sendMessage(contact.id, text)
+        }
     }
 }

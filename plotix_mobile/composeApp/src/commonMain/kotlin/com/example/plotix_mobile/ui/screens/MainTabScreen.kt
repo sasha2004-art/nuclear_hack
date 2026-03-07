@@ -15,6 +15,7 @@ import cafe.adriel.voyager.core.model.rememberScreenModel
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
+import com.example.plotix_mobile.domain.getChatRepository
 import com.example.plotix_mobile.presentation.main.MainScreenModel
 import com.example.plotix_mobile.ui.components.ChatListItem
 import com.example.plotix_mobile.ui.theme.Colors
@@ -24,7 +25,7 @@ class MainTabScreen : Screen {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
-        val screenModel = rememberScreenModel { MainScreenModel() }
+        val screenModel = rememberScreenModel { MainScreenModel(getChatRepository()) }
         val state by screenModel.state.collectAsState()
 
         Scaffold(
@@ -40,13 +41,19 @@ class MainTabScreen : Screen {
                 )
             }
         ) { padding ->
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
-                items(state.chats, key = { it.id }) { chat ->
-                    ChatListItem(
-                        chat = chat,
-                        isSelected = false,
-                        onClick = { navigator.push(ChatScreen(chat)) } // Навигация работает!
-                    )
+            if (state.isLoading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                    CircularProgressIndicator(color = Colors.Accent)
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
+                    items(state.contacts, key = { it.id }) { chat ->
+                        ChatListItem(
+                            chat = chat,
+                            isSelected = false,
+                            onClick = { navigator.push(ChatScreen(chat)) }
+                        )
+                    }
                 }
             }
         }

@@ -18,6 +18,17 @@ import (
 	"plotix_core/transport"
 )
 
+type MessageListener interface {
+	OnNewMessage(peerID string, text string)
+}
+
+var currentListener MessageListener
+
+func RegisterListener(l MessageListener) {
+	currentListener = l
+	log.Println("[MOBILE] Message listener registered from Kotlin")
+}
+
 //go:embed all:ui_dist
 var uiStatic embed.FS
 
@@ -60,7 +71,9 @@ func Start(dataDir string, ifaceName string) {
 	state.Mu.Unlock()
 	state.DisplayName = func() string {
 		acc := mgr.GetAccount(mgr.ActivePeerID)
-		if acc == nil { return "" }
+		if acc == nil {
+			return ""
+		}
 		return acc.Name
 	}
 
@@ -68,6 +81,25 @@ func Start(dataDir string, ifaceName string) {
 	uiContent, _ := fs.Sub(uiStatic, "ui_dist")
 	server := api.NewServer(state, uiContent, mgr)
 	go transport.StartServer(state, server.Broadcast)
+
+	go func() {
+		log.Println("[MOBILE] Event bridge goroutine started")
+		for event := range server.Broadcast {
+			if currentListener == nil {
+				continue
+			}
+
+			if event.Type == "chat" {
+				if payload, ok := event.Payload.(transport.ChatPayload); ok {
+					currentListener.OnNewMessage(payload.SenderID, payload.Content)
+				} else if m, ok := event.Payload.(map[string]interface{}); ok {
+					sender, _ := m["sender_id"].(string)
+					content, _ := m["content"].(string)
+					currentListener.OnNewMessage(sender, content)
+				}
+			}
+		}
+	}()
 
 	// 4. Safe Discovery for Android
 	if ifaceName != "" {
