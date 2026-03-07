@@ -12,28 +12,29 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Install Gomobile
+      - name: Install Gomobile Tools
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           go install golang.org/x/mobile/cmd/gobind@latest
           gomobile init
 
-      - name: Go Mod Tidy
-        working-directory: ./plotix_core
-        run: go mod tidy
-
-      - name: Build iOS
-        # Указываем рабочую директорию, где лежит go.mod
+      - name: Fetch Mobile Dependencies
         working-directory: ./plotix_core
         run: |
-          # Создаем папку для результата на уровень выше (в корне репозитория)
+          # Принудительно скачиваем пакеты, которые требует gomobile для iOS
+          go get golang.org/x/mobile/bind
+          go get golang.org/x/mobile/bind/objc
+          go mod tidy
+
+      - name: Build iOS
+        working-directory: ./plotix_core
+        run: |
           mkdir -p ../mobile_out
-          # Запускаем сборку пакета ./mobile относительно текущей папки (plotix_core)
+          # Используем флаг -v для детального лога, если опять упадет
           gomobile bind -v -target=ios -o ../mobile_out/PlotixCore.xcframework ./mobile
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PlotixCore-iOS-Framework
-          # Путь к файлу теперь в корне репозитория в папке mobile_out
           path: mobile_out/PlotixCore.xcframework
