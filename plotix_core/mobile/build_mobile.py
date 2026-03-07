@@ -45,7 +45,7 @@ def build():
         # -androidapi 21: фиксит ошибку NDK 26 (требует минимум API 21)
         # -o: куда положить результат
         # ./mobile: какой пакет собирать (относительно корня root_dir)
-        cmd = f'gomobile bind -v -target=android -androidapi 21 -o "{aar_path}" ./mobile'
+        cmd = f'gomobile bind -v -target=android -androidapi 21 -ldflags="-checklinkname=0" -o "{aar_path}" ./mobile'
 
         if not run_command(cmd, "Сборка Android AAR"):
             print("\n[!] КРИТИЧЕСКАЯ ОШИБКА СБОРКИ")

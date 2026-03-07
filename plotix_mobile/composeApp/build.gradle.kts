@@ -28,6 +28,7 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.activity.compose)
+            implementation(files("libs/plotix_core.aar"))
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)

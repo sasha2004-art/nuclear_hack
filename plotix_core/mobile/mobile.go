@@ -1,162 +1,99 @@
-// Package mobile provides the entry point for gomobile binding.
-// It exposes a simple API for Android (.aar) and iOS (.xcframework).
-package mobile
+package plotix
 
 import (
-    _ "golang.org/x/mobile/bind"
+	"embed"
 	"encoding/hex"
-	"fmt"
+	"io/fs"
 	"log"
+	"os"
+
+	_ "golang.org/x/mobile/bind"
 
 	"plotix_core/accounts"
 	"plotix_core/api"
 	"plotix_core/core"
 	"plotix_core/crypto"
 	"plotix_core/discovery"
-	"plotix_core/models"
 	"plotix_core/storage"
 	"plotix_core/transport"
-	"plotix_core/utils"
 )
 
-var (
-	nodeState  *core.NodeState
-	apiServer  *api.Server
-	accountMgr *accounts.Manager
-)
+//go:embed all:ui_dist
+var uiStatic embed.FS
 
-// StartNode launches the Plotix P2P core.
-// dataDir must be the app's internal storage path (e.g. context.filesDir on Android).
-// Returns "started" on success or an error string prefixed with "error:".
-func StartNode(dataDir string) string {
-	ifaces, err := utils.GetInterfacesList()
-	if err != nil || len(ifaces) == 0 {
-		return "error: no network interfaces available"
+func Start(dataDir string, ifaceName string) {
+	log.Printf("[MOBILE] Core starting. Iface: %s", ifaceName)
+
+	if err := os.Chdir(dataDir); err != nil {
+		log.Printf("[MOBILE] os.Chdir error: %v", err)
 	}
-	selectedIface := ifaces[0].Name
 
-	accountMgr = accounts.NewManager(dataDir)
-	if err := accountMgr.Load(); err != nil {
-		return "error: account manager: " + err.Error()
+	// 1. Account Management
+	mgr := accounts.NewManager(dataDir + "/data")
+	if err := mgr.Load(); err != nil {
+		log.Printf("[FATAL] Account manager error: %v", err)
+		return
 	}
 
 	var ident *crypto.Identity
-	if len(accountMgr.Accounts) == 0 {
-		var createErr error
-		_, ident, createErr = accountMgr.CreateAccount("Mobile User")
-		if createErr != nil {
-			return "error: create account: " + createErr.Error()
-		}
-		accountMgr.ActivePeerID = ident.PeerID
-		accountMgr.Save()
+	if len(mgr.Accounts) == 0 {
+		_, newIdent, _ := mgr.CreateAccount("")
+		ident = newIdent
+		mgr.ActivePeerID = ident.PeerID
+		mgr.Save()
 	} else {
-		activeID := accountMgr.LoadActive()
-		if activeID == "" || !accountMgr.HasAccount(activeID) {
-			activeID = accountMgr.Accounts[0].PeerID
+		activeID := mgr.LoadActive()
+		if activeID == "" || !mgr.HasAccount(activeID) {
+			activeID = mgr.Accounts[0].PeerID
 		}
-		accountMgr.ActivePeerID = activeID
-
-		var loadErr error
-		ident, loadErr = crypto.InitIdentity(accountMgr.GetKeystorePath(activeID))
-		if loadErr != nil {
-			return "error: identity: " + loadErr.Error()
-		}
+		mgr.ActivePeerID = activeID
+		ident, _ = crypto.InitIdentity(mgr.GetKeystorePath(activeID))
 	}
 
-	log.Printf("[MOBILE] PeerID: %s", ident.PeerID)
-
-	storage.InitDB(accountMgr.GetAccountDir(accountMgr.ActivePeerID))
-
-	nodeState = core.NewNodeState(ident)
+	// 2. Storage & State
+	storage.InitDB(mgr.GetAccountDir(mgr.ActivePeerID))
+	state := core.NewNodeState(ident)
 
 	contacts, _ := storage.GetAllContacts()
-	nodeState.Mu.Lock()
-	nodeState.PeerAliases = contacts
-	nodeState.Mu.Unlock()
-	nodeState.DisplayName = func() string {
-		acc := accountMgr.GetAccount(accountMgr.ActivePeerID)
-		if acc == nil || acc.Ghost {
-			return ""
-		}
+	state.Mu.Lock()
+	state.PeerAliases = contacts
+	state.Mu.Unlock()
+	state.DisplayName = func() string {
+		acc := mgr.GetAccount(mgr.ActivePeerID)
+		if acc == nil { return "" }
 		return acc.Name
 	}
 
-	apiServer = api.NewServer(nodeState, nil, accountMgr)
+	// 3. API & Transport
+	uiContent, _ := fs.Sub(uiStatic, "ui_dist")
+	server := api.NewServer(state, uiContent, mgr)
+	go transport.StartServer(state, server.Broadcast)
 
-	apiServer.SwitchAccount = func(peerID string) error {
-		if !accountMgr.HasAccount(peerID) {
-			return fmt.Errorf("account not found: %s", peerID)
-		}
-		nodeState.ResetConnections()
-		storage.CloseDB()
-
-		newIdent, err := crypto.InitIdentity(accountMgr.GetKeystorePath(peerID))
-		if err != nil {
-			return err
-		}
-
-		nodeState.Mu.Lock()
-		nodeState.Identity = newIdent
-		nodeState.Mu.Unlock()
-
-		storage.InitDB(accountMgr.GetAccountDir(peerID))
-
-		contacts, _ := storage.GetAllContacts()
-		nodeState.Mu.Lock()
-		nodeState.PeerAliases = contacts
-		nodeState.Mu.Unlock()
-
-		accountMgr.ActivePeerID = peerID
-		accountMgr.Save()
-
-		apiServer.Broadcast <- models.WSEvent{
-			Type:    "account_switched",
-			Payload: map[string]string{"peer_id": peerID},
-		}
-
-		log.Printf("[MOBILE] Switched to account %s", peerID)
-		return nil
+	// 4. Safe Discovery for Android
+	if ifaceName != "" {
+		log.Printf("[MOBILE] Starting discovery on: %s", ifaceName)
+		go discovery.Start(state, ifaceName)
 	}
 
-	go apiServer.Start("8080")
-	go transport.StartServer(nodeState, apiServer.Broadcast)
-	discovery.Start(nodeState, selectedIface)
-
+	// 5. Handshake logic
 	go func() {
-		for ip := range nodeState.NewPeerChan {
-			log.Printf("[MOBILE] Handshake with %s", ip)
-			var displayName string
-			if nodeState.DisplayName != nil {
-				displayName = nodeState.DisplayName()
-			}
-			nodeState.Mu.RLock()
+		for ip := range state.NewPeerChan {
+			log.Printf("[BOOT] Handshake with %s", ip)
+			state.Mu.RLock()
 			h := transport.HandshakePayload{
-				PeerID:       nodeState.Identity.PeerID,
-				PublicKey:    nodeState.Identity.PublicKey,
-				Name:         displayName,
-				EphemeralPub: hex.EncodeToString(nodeState.EphemeralPub),
+				PeerID:       state.Identity.PeerID,
+				PublicKey:    state.Identity.PublicKey,
+				Name:         state.DisplayName(),
+				EphemeralPub: hex.EncodeToString(state.EphemeralPub),
 			}
-			nodeState.Mu.RUnlock()
-			if err := transport.SendPacket(nodeState, apiServer.Broadcast, "", ip, "handshake", h); err != nil {
-				log.Printf("[MOBILE] Handshake error with %s: %v", ip, err)
-			}
+			state.Mu.RUnlock()
+			transport.SendPacket(state, server.Broadcast, "", ip, "handshake", h)
 		}
 	}()
 
-	return "started"
+	server.Start("8080")
 }
 
-// GetPeerID returns the current node's PeerID.
-func GetPeerID() string {
-	if nodeState == nil {
-		return ""
-	}
-	nodeState.Mu.RLock()
-	defer nodeState.Mu.RUnlock()
-	return nodeState.Identity.PeerID
-}
-
-// GetAPIPort returns the local API port the node is listening on.
-func GetAPIPort() string {
-	return "8080"
+func OpenBrowser(url string) {
+	log.Printf("[MOBILE] Browser request: %s", url)
 }

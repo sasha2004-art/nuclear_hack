@@ -1,4 +1,4 @@
-package mobile
+package plotix
 
 import (
 	"net"
