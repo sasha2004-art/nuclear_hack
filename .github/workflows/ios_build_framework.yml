@@ -5,12 +5,14 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      # Обновили до v4
+      - uses: actions/checkout@v4
 
+      # Обновили до v5
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.22'
 
       - name: Install Gomobile
         run: |
@@ -18,14 +20,20 @@ jobs:
           go install golang.org/x/mobile/cmd/gobind@latest
           gomobile init
 
+      # Очень важный шаг: скачиваем зависимости перед сборкой
+      - name: Go Mod Tidy
+        working-directory: ./plotix_core
+        run: go mod tidy
+
       - name: Build iOS
         run: |
           mkdir -p mobile_out
-          # Запуск сборки (путь должен соответствовать структуре)
+          # Убедитесь, что путь ./plotix_core/mobile корректен относительно корня репозитория
           gomobile bind -v -target=ios -o mobile_out/PlotixCore.xcframework ./plotix_core/mobile
 
+      # Обновили до v4 (исправляет вашу ошибку)
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: PlotixCore.xcframework
+          name: PlotixCore-iOS-Framework
           path: mobile_out/PlotixCore.xcframework
