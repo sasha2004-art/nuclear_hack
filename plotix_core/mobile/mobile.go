@@ -104,7 +104,7 @@ func Start(dataDir string, ifaceName string) {
 	// 4. Safe Discovery for Android
 	if ifaceName != "" {
 		log.Printf("[MOBILE] Starting discovery on: %s", ifaceName)
-		go discovery.Start(state, ifaceName)
+		go discovery.Start(state, ifaceName, server.Broadcast)
 	}
 
 	// 5. Handshake logic

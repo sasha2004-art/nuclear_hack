@@ -3,87 +3,110 @@ package discovery
 import (
 	"encoding/json"
 	"log"
-	"net" // Используем стандартный net для типов и UDP
+	"net"
 	"time"
 
-	"github.com/wlynxg/anet" // Исправляет Permission Denied на Android
+	"github.com/wlynxg/anet"
+	"golang.org/x/net/ipv4"
 	"plotix_core/core"
+	"plotix_core/models"
 )
 
 const (
-	multicastGroup = "224.0.0.251:9999"
-	broadcastAddr  = "255.255.255.255:9999"
+	multicastAddr = "239.0.0.250"
+	discoveryPort = 9999
 )
 
-// AnnounceMsg структура сообщения для обнаружения узлов
 type AnnounceMsg struct {
 	PeerID string `json:"peer_id"`
 	Name   string `json:"name,omitempty"`
 }
 
-// Start запускает процесс обнаружения
-func Start(state *core.NodeState, ifaceName string) {
-	// 1. Используем anet для безопасного получения интерфейса на Android
-	iface, err := anet.InterfaceByName(ifaceName)
-	if err != nil {
-		log.Printf("[DISCOVERY] Ошибка поиска интерфейса %s: %v", ifaceName, err)
-		return
-	}
+func Start(state *core.NodeState, ifaceName string, broadcastChan chan models.WSEvent) {
+	state.Mu.RLock()
+	selfID := state.Identity.PeerID
+	state.Mu.RUnlock()
 
-	// 2. Используем anet для получения IP-адресов этого интерфейса
-	// Это заменяет net.InterfaceAddrs(), который запрещен на Android 11+
-	addrs, err := anet.InterfaceAddrsByInterface(iface)
-	if err != nil || len(addrs) == 0 {
-		log.Printf("[DISCOVERY] Не удалось получить IP для %s: %v", ifaceName, err)
-		return
-	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[DISCOVERY] Panic in Start: %v", r)
+			}
+		}()
 
-	var localIP net.IP
-	for _, addr := range addrs {
-		// Ищем первый подходящий IPv4 адрес
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				localIP = ipnet.IP
+		log.Printf("[DISCOVERY] Initializing on interface: %s", ifaceName)
+
+		iface, err := anet.InterfaceByName(ifaceName)
+		if err != nil {
+			log.Printf("[DISCOVERY] Error finding interface %s: %v", ifaceName, err)
+			return
+		}
+
+		addrs, err := anet.InterfaceAddrsByInterface(iface)
+		if err != nil || len(addrs) == 0 {
+			log.Printf("[DISCOVERY] No IP found on interface %s", ifaceName)
+			return
+		}
+
+		var localIP net.IP
+		var bIP net.IP
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+				localIP = ipnet.IP.To4()
+				mask := ipnet.Mask
+				if len(mask) == 16 {
+					mask = mask[12:]
+				}
+				calcB := make(net.IP, 4)
+				for i := 0; i < 4; i++ {
+					calcB[i] = localIP[i] | ^mask[i]
+				}
+				bIP = calcB
 				break
 			}
 		}
-	}
 
-	if localIP == nil {
-		log.Printf("[DISCOVERY] IPv4 адрес не найден на %s", ifaceName)
-		return
-	}
+		if localIP == nil {
+			log.Printf("[DISCOVERY] Could not determine local IPv4")
+			return
+		}
 
-	mAddr, _ := net.ResolveUDPAddr("udp4", multicastGroup)
-	bAddr, _ := net.ResolveUDPAddr("udp4", broadcastAddr)
+		log.Printf("[DISCOVERY] CONTEXT: MyID=%s IP=%s Bcast=%s Iface=%s", selfID[:8], localIP, bIP, iface.Name)
 
-	log.Printf("[DISCOVERY] Старт на %s (IP: %s)", iface.Name, localIP)
+		mAddr := &net.UDPAddr{IP: net.ParseIP(multicastAddr), Port: discoveryPort}
+		bAddr := &net.UDPAddr{IP: bIP, Port: discoveryPort}
 
-	// Запускаем слушатель (принимает чужие сигналы)
-	go listen(state, iface)
-
-	// Запускаем вещатель (отправляет наши сигналы)
-	go broadcast(state, localIP, mAddr, bAddr)
+		go listen(state, iface, selfID, broadcastChan)
+		go broadcast(state, localIP, iface, mAddr, bAddr)
+	}()
 }
 
-// listen слушает входящие UDP пакеты
-func listen(state *core.NodeState, iface *net.Interface) {
-	// Слушаем на всех интерфейсах (0.0.0.0), порт 9999
-	addr := &net.UDPAddr{IP: net.IPv4zero, Port: 9999}
-
-	// Обычный ListenUDP разрешен на Android
-	conn, err := net.ListenUDP("udp4", addr)
+func listen(state *core.NodeState, iface *net.Interface, selfID string, broadcastChan chan models.WSEvent) {
+	log.Printf("[DISCOVERY] Listening on 0.0.0.0:%d", discoveryPort)
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: discoveryPort})
 	if err != nil {
-		log.Printf("[DISCOVERY] Ошибка слушателя: %v", err)
+		log.Printf("[DISCOVERY] Listen error: %v", err)
 		return
 	}
 	defer conn.Close()
 
-	buffer := make([]byte, 1024)
+	pc := ipv4.NewPacketConn(conn)
+	// Включаем Loopback: если мы видим свои же пакеты, значит сетевой стек в порядке
+	if err := pc.SetMulticastLoopback(true); err != nil {
+		log.Printf("[DISCOVERY] SetMulticastLoopback error: %v", err)
+	}
+
+	group := net.ParseIP(multicastAddr)
+	if err := pc.JoinGroup(iface, &net.UDPAddr{IP: group}); err != nil {
+		log.Printf("[DISCOVERY] JoinGroup error: %v", err)
+	} else {
+		log.Printf("[DISCOVERY] Joined multicast group %s", multicastAddr)
+	}
+
+	buffer := make([]byte, 2048)
 	for {
 		n, src, err := conn.ReadFromUDP(buffer)
 		if err != nil {
-			log.Printf("[DISCOVERY] Ошибка чтения: %v", err)
 			continue
 		}
 
@@ -92,56 +115,63 @@ func listen(state *core.NodeState, iface *net.Interface) {
 			continue
 		}
 
-		state.Mu.RLock()
-		selfID := state.Identity.PeerID
-		state.Mu.RUnlock()
-
-		// Игнорируем собственные пакеты
 		if msg.PeerID == selfID {
+			// Важный лог для отладки: если он есть, то отправка и прием внутри устройства работают
+			log.Printf("[DISCOVERY] [LOOPBACK] Received own packet from %s", src.IP)
 			continue
 		}
 
-		// Обновляем данные об узле в состоянии
-		state.UpdatePeer(msg.PeerID, src.IP.String())
+		log.Printf("[DISCOVERY] >>> PEER DETECTED <<< ID=%s IP=%s Name=%s", msg.PeerID[:8], src.IP, msg.Name)
+
+		isNew := state.UpdatePeer(msg.PeerID, src.IP.String())
+		state.UpdateLastSeen(msg.PeerID)
 		if msg.Name != "" {
 			state.SetPeerName(msg.PeerID, msg.Name)
 		}
-		state.UpdateLastSeen(msg.PeerID)
 
-		log.Printf("[DISCOVERY] Найден пир: %s (IP: %s)", msg.PeerID, src.IP.String())
+		if isNew && broadcastChan != nil {
+			select {
+			case broadcastChan <- models.WSEvent{
+				Type:    "peer_online",
+				Payload: msg.PeerID,
+			}:
+			default:
+				log.Println("[DISCOVERY] Broadcast channel full, skipping peer_online notification")
+			}
+		}
 	}
 }
 
-// broadcast отправляет пакеты анонса в сеть
-func broadcast(state *core.NodeState, localIP net.IP, mAddr, bAddr *net.UDPAddr) {
-	// Привязываемся к локальному IP для отправки
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: localIP, Port: 0})
+func broadcast(state *core.NodeState, localIP net.IP, iface *net.Interface, mAddr, bAddr *net.UDPAddr) {
+	log.Printf("[DISCOVERY] Starting broadcast loop (3s interval)")
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
-		log.Printf("[DISCOVERY] Ошибка вещателя: %v", err)
+		log.Printf("[DISCOVERY] Broadcast socket error: %v", err)
 		return
 	}
 	defer conn.Close()
 
+	pc := ipv4.NewPacketConn(conn)
+	if err := pc.SetMulticastInterface(iface); err != nil {
+		log.Printf("[DISCOVERY] SetMulticastInterface error: %v", err)
+	}
+
 	for {
 		state.Mu.RLock()
 		peerID := state.Identity.PeerID
-		state.Mu.RUnlock()
-
 		var name string
 		if state.DisplayName != nil {
 			name = state.DisplayName()
 		}
+		state.Mu.RUnlock()
 
-		msg := AnnounceMsg{
-			PeerID: peerID,
-			Name:   name,
-		}
-		data, _ := json.Marshal(msg)
+		msg, _ := json.Marshal(AnnounceMsg{PeerID: peerID, Name: name})
 
-		// Отправляем и в мультикаст, и в броадкаст для надежности
-		conn.WriteToUDP(data, mAddr)
-		conn.WriteToUDP(data, bAddr)
+		// Отправляем по трем каналам
+		_, _ = conn.WriteToUDP(msg, mAddr)
+		_, _ = conn.WriteToUDP(msg, bAddr)
+		_, _ = conn.WriteToUDP(msg, &net.UDPAddr{IP: net.IPv4bcast, Port: discoveryPort})
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(3 * time.Second)
 	}
 }

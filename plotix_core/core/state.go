@@ -104,7 +104,7 @@ func (s *NodeState) SetLastMsgID(peerID, msgID string) {
 	s.LastMsgIDs[peerID] = msgID
 }
 
-func (s *NodeState) UpdatePeer(peerID, ip string) {
+func (s *NodeState) UpdatePeer(peerID, ip string) bool {
 	s.Mu.Lock()
 	_, exists := s.Peers[peerID]
 	s.Peers[peerID] = ip
@@ -113,6 +113,7 @@ func (s *NodeState) UpdatePeer(peerID, ip string) {
 	if !exists {
 		s.NewPeerChan <- ip
 	}
+	return !exists
 }
 
 func (s *NodeState) SetPeerName(peerID, name string) {

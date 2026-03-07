@@ -314,7 +314,7 @@ func handleConnection(conn net.Conn, state *core.NodeState, uiEvents chan models
 					uiEvents <- models.WSEvent{
 						Type: "new_message",
 						Payload: map[string]interface{}{
-							"id": msgID, "sender": remotePeerID, "text": fileMsg, "timestamp": now,
+							"id": msgID, "from": remotePeerID, "text": fileMsg, "timestamp": now,
 						},
 					}
 				}
@@ -388,7 +388,7 @@ func processIncomingChat(c ChatPayload, conn net.Conn, state *core.NodeState, ui
 		uiEvents <- models.WSEvent{
 			Type: "new_message",
 			Payload: map[string]interface{}{
-				"id": c.ID, "sender": senderID, "text": c.Content, "timestamp": c.Timestamp,
+				"id": c.ID, "from": senderID, "text": c.Content, "timestamp": c.Timestamp,
 			},
 		}
 	}
